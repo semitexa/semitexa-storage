@@ -56,7 +56,7 @@ final class LocalDriver implements StorageDriverInterface
 
     private function resolveDefaultBasePath(): string
     {
-        $projectRoot = Environment::getEnvValue('PROJECT_ROOT') ?? getcwd();
+        $projectRoot = Environment::getEnvValue('PROJECT_ROOT', getcwd());
         return $projectRoot . '/var/uploads';
     }
 }
