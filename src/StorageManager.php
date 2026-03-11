@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Storage;
 
 use Semitexa\Core\Attributes\SatisfiesServiceContract;
+use Semitexa\Core\Environment;
 use Semitexa\Storage\Contract\StorageDriverInterface;
 use Semitexa\Storage\Driver\LocalDriver;
 use Semitexa\Storage\Driver\S3Driver;
@@ -45,7 +46,7 @@ final class StorageManager implements StorageDriverInterface
             return $this->driver;
         }
 
-        $driverName = getenv('STORAGE_DRIVER') ?: 'local';
+        $driverName = Environment::getEnvValue('STORAGE_DRIVER', 'local');
 
         $this->driver = match ($driverName) {
             's3' => new S3Driver(),

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Storage\Driver;
 
+use Semitexa\Core\Environment;
 use Semitexa\Storage\Contract\StorageDriverInterface;
 
 final class LocalDriver implements StorageDriverInterface
@@ -55,7 +56,7 @@ final class LocalDriver implements StorageDriverInterface
 
     private function resolveDefaultBasePath(): string
     {
-        $projectRoot = getenv('PROJECT_ROOT') ?: getcwd();
+        $projectRoot = Environment::getEnvValue('PROJECT_ROOT') ?? getcwd();
         return $projectRoot . '/var/uploads';
     }
 }

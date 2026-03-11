@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Storage\Driver;
 
+use Semitexa\Core\Environment;
 use Semitexa\Storage\Contract\StorageDriverInterface;
 
 final class S3Driver implements StorageDriverInterface
@@ -21,11 +22,11 @@ final class S3Driver implements StorageDriverInterface
         ?string $key = null,
         ?string $secret = null,
     ) {
-        $this->bucket = $bucket ?? getenv('STORAGE_S3_BUCKET') ?: '';
-        $this->region = $region ?? getenv('STORAGE_S3_REGION') ?: 'us-east-1';
-        $this->endpoint = $endpoint ?? getenv('STORAGE_S3_ENDPOINT') ?: "https://s3.{$this->region}.amazonaws.com";
-        $this->key = $key ?? getenv('STORAGE_S3_KEY') ?: '';
-        $this->secret = $secret ?? getenv('STORAGE_S3_SECRET') ?: '';
+        $this->bucket = $bucket ?? Environment::getEnvValue('STORAGE_S3_BUCKET', '');
+        $this->region = $region ?? Environment::getEnvValue('STORAGE_S3_REGION', 'us-east-1');
+        $this->endpoint = $endpoint ?? Environment::getEnvValue('STORAGE_S3_ENDPOINT') ?? "https://s3.{$this->region}.amazonaws.com";
+        $this->key = $key ?? Environment::getEnvValue('STORAGE_S3_KEY', '');
+        $this->secret = $secret ?? Environment::getEnvValue('STORAGE_S3_SECRET', '');
     }
 
     public function put(string $path, string $contents, string $mimeType): void
