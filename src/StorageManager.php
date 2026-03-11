@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Semitexa\Storage;
 
-use Semitexa\Core\Attributes\AsServiceContract;
+use Semitexa\Core\Attributes\SatisfiesServiceContract;
 use Semitexa\Storage\Contract\StorageDriverInterface;
 use Semitexa\Storage\Driver\LocalDriver;
 use Semitexa\Storage\Driver\S3Driver;
 
-#[AsServiceContract(of: StorageDriverInterface::class)]
+#[SatisfiesServiceContract(of: StorageDriverInterface::class)]
 final class StorageManager implements StorageDriverInterface
 {
     private ?StorageDriverInterface $driver = null;
