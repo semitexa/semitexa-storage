@@ -24,7 +24,7 @@ final class S3Driver implements StorageDriverInterface
     ) {
         $this->bucket = $bucket ?? Environment::getEnvValue('STORAGE_S3_BUCKET', '');
         $this->region = $region ?? Environment::getEnvValue('STORAGE_S3_REGION', 'us-east-1');
-        $this->endpoint = $endpoint ?? Environment::getEnvValue('STORAGE_S3_ENDPOINT') ?? "https://s3.{$this->region}.amazonaws.com";
+        $this->endpoint = $endpoint ?? Environment::getEnvValue('STORAGE_S3_ENDPOINT', "https://s3.{$this->region}.amazonaws.com");
         $this->key = $key ?? Environment::getEnvValue('STORAGE_S3_KEY', '');
         $this->secret = $secret ?? Environment::getEnvValue('STORAGE_S3_SECRET', '');
     }
