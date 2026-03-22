@@ -46,7 +46,7 @@ final class S3Driver implements StorageDriverInterface
     public function delete(string $path): bool
     {
         $response = $this->request('DELETE', $path);
-        return $response['status'] >= HttpStatus::Ok->value && $response['status'] < 300;
+        return $response['status'] >= HttpStatus::Ok->value && $response['status'] < HttpStatus::MultipleChoices->value;
     }
 
     public function exists(string $path): bool
