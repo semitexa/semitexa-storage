@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Storage\Driver;
 
 use Semitexa\Core\Environment;
+use Semitexa\Core\Http\HttpStatus;
 use Semitexa\Storage\Contract\StorageDriverInterface;
 
 final class S3Driver implements StorageDriverInterface
@@ -39,19 +40,19 @@ final class S3Driver implements StorageDriverInterface
     public function get(string $path): ?string
     {
         $response = $this->request('GET', $path);
-        return $response['status'] === 200 ? $response['body'] : null;
+        return $response['status'] === HttpStatus::Ok->value ? $response['body'] : null;
     }
 
     public function delete(string $path): bool
     {
         $response = $this->request('DELETE', $path);
-        return $response['status'] >= 200 && $response['status'] < 300;
+        return $response['status'] >= HttpStatus::Ok->value && $response['status'] < HttpStatus::MultipleChoices->value;
     }
 
     public function exists(string $path): bool
     {
         $response = $this->request('HEAD', $path);
-        return $response['status'] === 200;
+        return $response['status'] === HttpStatus::Ok->value;
     }
 
     public function url(string $path): string
