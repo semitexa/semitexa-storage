@@ -25,5 +25,5 @@
             "description": "File storage abstraction: local filesystem, S3/MinIO"
         }
     },
-    "version": "0.0.5"
+    "version": "0.0.6"
 }
