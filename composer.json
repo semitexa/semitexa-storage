@@ -1,6 +1,6 @@
 {
     "name": "semitexa/storage",
-    "description": "Semitexa Storage — driver-based file storage abstraction (local, S3/MinIO)",
+    "description": "Semitexa Storage \u2014 driver-based file storage abstraction (local, S3/MinIO)",
     "type": "semitexa-module",
     "license": "MIT",
     "authors": [
@@ -25,5 +25,12 @@
             "description": "File storage abstraction: local filesystem, S3/MinIO"
         }
     },
-    "version": "0.0.6"
+    "version": "0.0.6",
+    "keywords": [
+        "semitexa",
+        "storage",
+        "filesystem",
+        "s3",
+        "minio"
+    ]
 }
