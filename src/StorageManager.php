@@ -7,13 +7,17 @@ namespace Semitexa\Storage;
 use Semitexa\Core\Attributes\SatisfiesServiceContract;
 use Semitexa\Core\Environment;
 use Semitexa\Storage\Contract\StorageDriverInterface;
+use Semitexa\Storage\Contract\StorageObjectStoreInterface;
 use Semitexa\Storage\Driver\LocalDriver;
 use Semitexa\Storage\Driver\S3Driver;
+use Semitexa\Storage\Value\StoredObjectDescriptor;
+use Semitexa\Storage\Value\StoredObjectMetadata;
 
 #[SatisfiesServiceContract(of: StorageDriverInterface::class)]
-final class StorageManager implements StorageDriverInterface
+#[SatisfiesServiceContract(of: StorageObjectStoreInterface::class)]
+final class StorageManager implements StorageObjectStoreInterface
 {
-    private ?StorageDriverInterface $driver = null;
+    private ?StorageObjectStoreInterface $driver = null;
 
     public function put(string $path, string $contents, string $mimeType): void
     {
@@ -40,7 +44,25 @@ final class StorageManager implements StorageDriverInterface
         return $this->getDriver()->url($path);
     }
 
-    private function getDriver(): StorageDriverInterface
+    public function stat(string $path): ?StoredObjectMetadata
+    {
+        return $this->getDriver()->stat($path);
+    }
+
+    /**
+     * @return resource|null
+     */
+    public function readStream(string $path)
+    {
+        return $this->getDriver()->readStream($path);
+    }
+
+    public function describe(string $path): ?StoredObjectDescriptor
+    {
+        return $this->getDriver()->describe($path);
+    }
+
+    private function getDriver(): StorageObjectStoreInterface
     {
         if ($this->driver !== null) {
             return $this->driver;

@@ -6,9 +6,11 @@ namespace Semitexa\Storage\Driver;
 
 use Semitexa\Core\Environment;
 use Semitexa\Core\Http\HttpStatus;
-use Semitexa\Storage\Contract\StorageDriverInterface;
+use Semitexa\Storage\Contract\StorageObjectStoreInterface;
+use Semitexa\Storage\Value\StoredObjectDescriptor;
+use Semitexa\Storage\Value\StoredObjectMetadata;
 
-final class S3Driver implements StorageDriverInterface
+final class S3Driver implements StorageObjectStoreInterface
 {
     private readonly string $bucket;
     private readonly string $region;
@@ -60,11 +62,81 @@ final class S3Driver implements StorageDriverInterface
         return rtrim($this->endpoint, '/') . '/' . $this->bucket . '/' . ltrim($path, '/');
     }
 
+    public function stat(string $path): ?StoredObjectMetadata
+    {
+        $response = $this->requestWithHeaders('HEAD', $path);
+        if ($response['status'] !== HttpStatus::Ok->value) {
+            return null;
+        }
+
+        $headers = $response['headers'];
+
+        $lastModified = isset($headers['last-modified'])
+            ? \DateTimeImmutable::createFromFormat('D, d M Y H:i:s \G\M\T', $headers['last-modified']) ?: null
+            : null;
+
+        return new StoredObjectMetadata(
+            path: $path,
+            exists: true,
+            size: isset($headers['content-length']) ? (int) $headers['content-length'] : null,
+            mimeType: $headers['content-type'] ?? null,
+            lastModifiedAt: $lastModified,
+            etag: isset($headers['etag']) ? trim($headers['etag'], '"') : null,
+        );
+    }
+
+    /**
+     * @return resource|null
+     */
+    public function readStream(string $path)
+    {
+        $response = $this->request('GET', $path);
+        if ($response['status'] !== HttpStatus::Ok->value) {
+            return null;
+        }
+
+        $stream = fopen('php://temp', 'r+b');
+        if ($stream === false) {
+            return null;
+        }
+
+        fwrite($stream, $response['body']);
+        rewind($stream);
+        return $stream;
+    }
+
+    public function describe(string $path): ?StoredObjectDescriptor
+    {
+        $metadata = $this->stat($path);
+        if ($metadata === null) {
+            return null;
+        }
+
+        return new StoredObjectDescriptor(
+            driver: 's3',
+            path: $path,
+            url: $this->url($path),
+            size: $metadata->size,
+            mimeType: $metadata->mimeType,
+            etag: $metadata->etag,
+        );
+    }
+
     /**
      * @param array<string, string> $extraHeaders
      * @return array{status: int, body: string}
      */
     private function request(string $method, string $path, string $body = '', array $extraHeaders = []): array
+    {
+        $result = $this->requestWithHeaders($method, $path, $body, $extraHeaders);
+        return ['status' => $result['status'], 'body' => $result['body']];
+    }
+
+    /**
+     * @param array<string, string> $extraHeaders
+     * @return array{status: int, body: string, headers: array<string, string>}
+     */
+    private function requestWithHeaders(string $method, string $path, string $body = '', array $extraHeaders = []): array
     {
         $path = '/' . ltrim($path, '/');
         $host = parse_url($this->endpoint, PHP_URL_HOST);
@@ -132,6 +204,16 @@ final class S3Driver implements StorageDriverInterface
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, 30);
 
+        $responseHeaders = [];
+        curl_setopt($ch, CURLOPT_HEADERFUNCTION, static function ($ch, string $header) use (&$responseHeaders): int {
+            $length = strlen($header);
+            $parts = explode(':', $header, 2);
+            if (count($parts) === 2) {
+                $responseHeaders[strtolower(trim($parts[0]))] = trim($parts[1]);
+            }
+            return $length;
+        });
+
         $curlHeaders = [];
         foreach ($headers as $k => $v) {
             $curlHeaders[] = "{$k}: {$v}";
@@ -146,6 +228,10 @@ final class S3Driver implements StorageDriverInterface
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
-        return ['status' => $status, 'body' => is_string($responseBody) ? $responseBody : ''];
+        return [
+            'status' => $status,
+            'body' => is_string($responseBody) ? $responseBody : '',
+            'headers' => $responseHeaders,
+        ];
     }
 }
