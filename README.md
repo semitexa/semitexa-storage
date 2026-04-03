@@ -1,4 +1,4 @@
-# semitexa/storage
+# Semitexa Storage
 
 Driver-based file storage abstraction with local and S3/MinIO backends.
 
