@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Storage;
 
-use Semitexa\Core\Attributes\SatisfiesServiceContract;
+use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Core\Environment;
 use Semitexa\Storage\Contract\StorageDriverInterface;
 use Semitexa\Storage\Contract\StorageObjectStoreInterface;
