@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Storage\Contract;
+namespace Semitexa\Storage\Domain\Contract;
 
-use Semitexa\Storage\Value\StoredObjectDescriptor;
-use Semitexa\Storage\Value\StoredObjectMetadata;
+use Semitexa\Storage\Domain\Model\StoredObjectDescriptor;
+use Semitexa\Storage\Domain\Model\StoredObjectMetadata;
 
 interface StorageObjectStoreInterface extends StorageDriverInterface
 {

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Storage\Contract;
+namespace Semitexa\Storage\Domain\Contract;
 
 interface StorageDriverInterface
 {

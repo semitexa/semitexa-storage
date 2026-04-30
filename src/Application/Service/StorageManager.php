@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Storage;
+namespace Semitexa\Storage\Application\Service;
 
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Core\Environment;
-use Semitexa\Storage\Contract\StorageDriverInterface;
-use Semitexa\Storage\Contract\StorageObjectStoreInterface;
-use Semitexa\Storage\Driver\LocalDriver;
-use Semitexa\Storage\Driver\S3Driver;
-use Semitexa\Storage\Value\StoredObjectDescriptor;
-use Semitexa\Storage\Value\StoredObjectMetadata;
+use Semitexa\Storage\Domain\Contract\StorageDriverInterface;
+use Semitexa\Storage\Domain\Contract\StorageObjectStoreInterface;
+use Semitexa\Storage\Application\Service\LocalDriver;
+use Semitexa\Storage\Application\Service\S3Driver;
+use Semitexa\Storage\Domain\Model\StoredObjectDescriptor;
+use Semitexa\Storage\Domain\Model\StoredObjectMetadata;
 
 #[SatisfiesServiceContract(of: StorageDriverInterface::class)]
 #[SatisfiesServiceContract(of: StorageObjectStoreInterface::class)]

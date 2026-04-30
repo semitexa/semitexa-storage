@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Storage\Driver;
+namespace Semitexa\Storage\Application\Service;
 
 use Semitexa\Core\Environment;
-use Semitexa\Storage\Contract\StorageObjectStoreInterface;
-use Semitexa\Storage\Value\StoredObjectDescriptor;
-use Semitexa\Storage\Value\StoredObjectMetadata;
+use Semitexa\Storage\Domain\Contract\StorageObjectStoreInterface;
+use Semitexa\Storage\Domain\Model\StoredObjectDescriptor;
+use Semitexa\Storage\Domain\Model\StoredObjectMetadata;
 
 final class LocalDriver implements StorageObjectStoreInterface
 {

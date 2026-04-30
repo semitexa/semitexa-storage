@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Storage\Value;
+namespace Semitexa\Storage\Domain\Model;
 
 final readonly class StoredObjectMetadata
 {
