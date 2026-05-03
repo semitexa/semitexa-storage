@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Storage\Application\Service;
+namespace Semitexa\Storage\Driver;
 
 use Semitexa\Core\Environment;
 use Semitexa\Core\Http\HttpStatus;
-use Semitexa\Storage\Domain\Contract\StorageObjectStoreInterface;
-use Semitexa\Storage\Domain\Model\StoredObjectDescriptor;
-use Semitexa\Storage\Domain\Model\StoredObjectMetadata;
+use Semitexa\Storage\Contract\StorageObjectStoreInterface;
+use Semitexa\Storage\Value\StoredObjectDescriptor;
+use Semitexa\Storage\Value\StoredObjectMetadata;
 
 final class S3Driver implements StorageObjectStoreInterface
 {

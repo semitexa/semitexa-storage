@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Storage\Domain\Model;
+namespace Semitexa\Storage\Value;
 
 final readonly class StoredObjectDescriptor
 {
