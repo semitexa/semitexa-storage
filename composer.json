@@ -1,35 +1,36 @@
 {
-  "name": "semitexa/storage",
-  "description": "Semitexa Storage — driver-based file storage abstraction (local, S3/MinIO)",
-  "type": "semitexa-module",
-  "license": "MIT",
-  "authors": [
-    {
-      "name": "Semitexa",
-      "email": "support@semitexa.com"
-    }
-  ],
-  "require": {
-    "php": "^8.4",
-    "semitexa/core": "*",
-    "semitexa/orm": "*"
-  },
-  "autoload": {
-    "psr-4": {
-      "Semitexa\\Storage\\": "src/"
-    }
-  },
-  "extra": {
-    "semitexa-module": {
-      "name": "storage",
-      "description": "File storage abstraction: local filesystem, S3/MinIO"
-    }
-  },
-  "keywords": [
-    "semitexa",
-    "storage",
-    "filesystem",
-    "s3",
-    "minio"
-  ]
+    "name": "semitexa/storage",
+    "description": "Semitexa Storage — driver-based file storage abstraction (local, S3/MinIO)",
+    "type": "semitexa-module",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Semitexa",
+            "email": "support@semitexa.com"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "semitexa/core": "*",
+        "semitexa/orm": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Semitexa\\Storage\\": "src/"
+        }
+    },
+    "extra": {
+        "semitexa-module": {
+            "name": "storage",
+            "description": "File storage abstraction: local filesystem, S3/MinIO"
+        }
+    },
+    "keywords": [
+        "semitexa",
+        "storage",
+        "filesystem",
+        "s3",
+        "minio"
+    ],
+    "version": "v0.0.9"
 }
