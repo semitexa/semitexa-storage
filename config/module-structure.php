@@ -5,7 +5,7 @@ declare(strict_types=1);
 use Semitexa\Dev\Application\Service\Ai\Verify\Structure\LocalModuleStructureExtension;
 use Semitexa\Dev\Application\Service\Ai\Verify\Structure\ModuleStructureRule;
 
-$pascalCasePhp = '/^[A-Z][A-Za-z0-9]*\.php$/';
+$pascalCasePhp = '/^[A-Z][A-Za-z0-9_]*\.php$/';
 
 return new LocalModuleStructureExtension(
     package: 'storage',
@@ -20,7 +20,7 @@ return new LocalModuleStructureExtension(
     pathRules: [
         'Contract' => new ModuleStructureRule(
             path: 'Contract',
-            allowedFilePatterns: ['/^[A-Z][A-Za-z0-9]*Interface\.php$/'],
+            allowedFilePatterns: ['/^[A-Z][A-Za-z0-9_]*Interface\.php$/'],
             mode: ModuleStructureRule::MODE_LEAF_FILES_ONLY,
             rationale: 'semitexa-storage public storage contracts imported by other packages.',
         ),
