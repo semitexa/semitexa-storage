@@ -7,10 +7,11 @@ namespace Semitexa\Storage\Driver;
 use Semitexa\Core\Environment;
 use Semitexa\Core\Http\HttpStatus;
 use Semitexa\Storage\Contract\StorageObjectStoreInterface;
+use Semitexa\Storage\Exception\StorageException;
 use Semitexa\Storage\Value\StoredObjectDescriptor;
 use Semitexa\Storage\Value\StoredObjectMetadata;
 
-final class S3Driver implements StorageObjectStoreInterface
+class S3Driver implements StorageObjectStoreInterface
 {
     private readonly string $bucket;
     private readonly string $region;
@@ -34,9 +35,17 @@ final class S3Driver implements StorageObjectStoreInterface
 
     public function put(string $path, string $contents, string $mimeType): void
     {
-        $this->request('PUT', $path, $contents, [
+        $response = $this->request('PUT', $path, $contents, [
             'Content-Type' => $mimeType,
         ]);
+        $status = $response['status'];
+        // Any non-2xx (403 AccessDenied, 500, SignatureDoesNotMatch, or a 0
+        // synthesised from a transport failure) means the object never landed.
+        // The old code discarded this status and returned as if the put
+        // succeeded — silent data loss.
+        if ($status < HttpStatus::Ok->value || $status >= HttpStatus::MultipleChoices->value) {
+            throw StorageException::writeFailed($path, "S3 PUT returned HTTP {$status}");
+        }
     }
 
     public function get(string $path): ?string
@@ -136,7 +145,7 @@ final class S3Driver implements StorageObjectStoreInterface
      * @param array<string, string> $extraHeaders
      * @return array{status: int, body: string, headers: array<string, string>}
      */
-    private function requestWithHeaders(string $method, string $path, string $body = '', array $extraHeaders = []): array
+    protected function requestWithHeaders(string $method, string $path, string $body = '', array $extraHeaders = []): array
     {
         $path = '/' . ltrim($path, '/');
         $host = parse_url($this->endpoint, PHP_URL_HOST);
@@ -199,12 +208,49 @@ final class S3Driver implements StorageObjectStoreInterface
 
         $url = $scheme . '://' . $hostHeader . $path;
 
+        $curlHeaders = [];
+        foreach ($headers as $k => $v) {
+            $curlHeaders[] = "{$k}: {$v}";
+        }
+
+        $responseHeaders = [];
+        $transport = $this->executeHttp($url, $method, $curlHeaders, $body, $responseHeaders);
+
+        // A transport failure (DNS, TLS, connection refused, timeout) leaves
+        // curl_exec() === false and status 0. Surfacing it is essential: on a
+        // read it is otherwise indistinguishable from a legitimate 404, and on
+        // a write it silently drops the object. A real HTTP status (incl. 404)
+        // is NOT a transport failure and flows through untouched.
+        if ($transport['body'] === false || $transport['errno'] !== 0) {
+            throw StorageException::transportFailed(
+                $method,
+                $path,
+                $transport['error'] !== '' ? $transport['error'] : "curl error {$transport['errno']}",
+            );
+        }
+
+        return [
+            'status' => $transport['status'],
+            'body' => is_string($transport['body']) ? $transport['body'] : '',
+            'headers' => $responseHeaders,
+        ];
+    }
+
+    /**
+     * The raw HTTP exchange, isolated so the signed-request assembly above stays
+     * transport-agnostic and testable. Populates $responseHeaders by reference.
+     *
+     * @param list<string>                $curlHeaders
+     * @param array<string, string>       $responseHeaders
+     * @return array{body: string|false, errno: int, error: string, status: int}
+     */
+    protected function executeHttp(string $url, string $method, array $curlHeaders, string $body, array &$responseHeaders): array
+    {
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, 30);
 
-        $responseHeaders = [];
         curl_setopt($ch, CURLOPT_HEADERFUNCTION, static function ($ch, string $header) use (&$responseHeaders): int {
             $length = strlen($header);
             $parts = explode(':', $header, 2);
@@ -214,10 +260,6 @@ final class S3Driver implements StorageObjectStoreInterface
             return $length;
         });
 
-        $curlHeaders = [];
-        foreach ($headers as $k => $v) {
-            $curlHeaders[] = "{$k}: {$v}";
-        }
         curl_setopt($ch, CURLOPT_HTTPHEADER, $curlHeaders);
 
         if ($body !== '') {
@@ -225,13 +267,14 @@ final class S3Driver implements StorageObjectStoreInterface
         }
 
         $responseBody = curl_exec($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $result = [
+            'body' => $responseBody,
+            'errno' => curl_errno($ch),
+            'error' => curl_error($ch),
+            'status' => (int) curl_getinfo($ch, CURLINFO_HTTP_CODE),
+        ];
         curl_close($ch);
 
-        return [
-            'status' => $status,
-            'body' => is_string($responseBody) ? $responseBody : '',
-            'headers' => $responseHeaders,
-        ];
+        return $result;
     }
 }

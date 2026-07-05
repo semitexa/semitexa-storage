@@ -6,6 +6,7 @@ namespace Semitexa\Storage\Driver;
 
 use Semitexa\Core\Environment;
 use Semitexa\Storage\Contract\StorageObjectStoreInterface;
+use Semitexa\Storage\Exception\StorageException;
 use Semitexa\Storage\Value\StoredObjectDescriptor;
 use Semitexa\Storage\Value\StoredObjectMetadata;
 
@@ -22,10 +23,18 @@ final class LocalDriver implements StorageObjectStoreInterface
     {
         $fullPath = $this->fullPath($path);
         $dir = dirname($fullPath);
-        if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
+        // The `!mkdir && !is_dir` guard tolerates a concurrent writer creating
+        // the directory first (mkdir returns false but the dir now exists —
+        // not an error), while still failing on a real permission/mount error.
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+            throw StorageException::writeFailed($path, "could not create directory {$dir}");
         }
-        file_put_contents($fullPath, $contents);
+        if (@file_put_contents($fullPath, $contents) === false) {
+            throw StorageException::writeFailed($path, 'file_put_contents failed (disk full, permissions, or path is a directory)');
+        }
+        // The sidecar carries only the MIME type, which is re-derivable via
+        // finfo on read, so a sidecar write failure is not data loss and stays
+        // best-effort — the object itself is already durably written above.
         $this->writeSidecarMetadata($fullPath, $mimeType);
     }
 
