@@ -72,6 +72,37 @@ final class LocalDriverWriteFailureTest extends TestCase
         $driver->put('object-as-dir', 'payload', 'application/octet-stream');
     }
 
+    #[Test]
+    public function a_traversal_path_is_confined_to_the_storage_root(): void
+    {
+        $driver = new LocalDriver($this->base);
+        $marker = dirname($this->base) . '/escaped-' . uniqid('', true) . '.txt';
+
+        foreach (['../' . basename($marker), 'a/../../' . basename($marker), '../../../../etc/passwd'] as $evil) {
+            try {
+                $driver->put($evil, 'pwned', 'text/plain');
+                self::fail("traversal path '{$evil}' was not confined");
+            } catch (StorageException $e) {
+                self::assertStringContainsString('escapes the storage root', $e->getMessage());
+            }
+        }
+
+        // A read also refuses to resolve out of the root.
+        $this->expectException(StorageException::class);
+        $driver->get('../' . basename($marker));
+    }
+
+    #[Test]
+    public function a_legitimate_nested_key_is_written_under_the_root(): void
+    {
+        // Confinement must not break normal server-generated keys.
+        $driver = new LocalDriver($this->base);
+        $driver->put('tenant-1/images/asset-42.bin', 'ok', 'application/octet-stream');
+
+        self::assertSame('ok', $driver->get('tenant-1/images/asset-42.bin'));
+        self::assertFileExists($this->base . '/tenant-1/images/asset-42.bin');
+    }
+
     private function rrmdir(string $dir): void
     {
         if (!is_dir($dir)) {

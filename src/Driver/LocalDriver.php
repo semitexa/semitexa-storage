@@ -16,7 +16,7 @@ final class LocalDriver implements StorageObjectStoreInterface
 
     public function __construct(?string $basePath = null)
     {
-        $this->basePath = rtrim($basePath ?? $this->resolveDefaultBasePath(), '/');
+        $this->basePath = self::normalize($basePath ?? $this->resolveDefaultBasePath());
     }
 
     public function put(string $path, string $contents, string $mimeType): void
@@ -118,7 +118,41 @@ final class LocalDriver implements StorageObjectStoreInterface
 
     private function fullPath(string $path): string
     {
-        return $this->basePath . '/' . $path;
+        // Confine to the storage root. Callers pass server-generated keys today,
+        // but the driver must not trust its caller: a `$path` containing `../`
+        // would otherwise traverse out of basePath (read/write/delete anywhere).
+        // The object may not exist yet (put creates it), so we normalise `..`/`.`
+        // lexically rather than realpath-ing the leaf, then require the result to
+        // stay under basePath (the trailing `/` in the prefix check rejects
+        // sibling directories like `<base>-evil`).
+        $full = self::normalize($this->basePath . '/' . $path);
+        if ($full !== $this->basePath && !str_starts_with($full, $this->basePath . '/')) {
+            throw StorageException::writeFailed($path, 'resolved path escapes the storage root');
+        }
+
+        return $full;
+    }
+
+    /**
+     * Collapse `.`/`..`/empty path segments. Lexical (no symlink/realpath), so it
+     * works on a not-yet-existing target; preserves a leading `/`.
+     */
+    private static function normalize(string $path): string
+    {
+        $isAbsolute = str_starts_with($path, '/');
+        $parts = [];
+        foreach (explode('/', $path) as $segment) {
+            if ($segment === '' || $segment === '.') {
+                continue;
+            }
+            if ($segment === '..') {
+                array_pop($parts);
+                continue;
+            }
+            $parts[] = $segment;
+        }
+
+        return ($isAbsolute ? '/' : '') . implode('/', $parts);
     }
 
     private function sidecarPath(string $fullPath): string
