@@ -65,7 +65,20 @@ final class LocalDriver implements StorageObjectStoreInterface
 
     public function url(string $path): string
     {
-        return '/api/platform/files/' . pathinfo($path, PATHINFO_FILENAME);
+        // Local objects have no intrinsic public URL. If the application
+        // exposes the storage root (static mount, CDN, or its own serving
+        // route), it says so via STORAGE_LOCAL_PUBLIC_URL and gets the full
+        // object path appended. Otherwise return '' — an honest "not
+        // publicly addressable" that callers already handle — instead of
+        // the previous fabricated /api/platform/files/{basename} link,
+        // which pointed at a route that does not exist and dropped the
+        // directory part of the path.
+        $base = Environment::getEnvValue('STORAGE_LOCAL_PUBLIC_URL', '');
+        if ($base === '') {
+            return '';
+        }
+
+        return rtrim($base, '/') . '/' . ltrim($path, '/');
     }
 
     public function stat(string $path): ?StoredObjectMetadata
