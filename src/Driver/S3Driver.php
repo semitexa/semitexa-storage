@@ -51,19 +51,42 @@ class S3Driver implements StorageObjectStoreInterface
     public function get(string $path): ?string
     {
         $response = $this->request('GET', $path);
-        return $response['status'] === HttpStatus::Ok->value ? $response['body'] : null;
+        return $this->isPresent($response['status'], 'GET', $path) ? $response['body'] : null;
     }
 
     public function delete(string $path): bool
     {
         $response = $this->request('DELETE', $path);
-        return $response['status'] >= HttpStatus::Ok->value && $response['status'] < HttpStatus::MultipleChoices->value;
+        // S3 answers 204 whether or not the object was there, so a 2xx is a
+        // completed delete. A 404 is the same outcome stated differently.
+        return $this->isPresent($response['status'], 'DELETE', $path);
     }
 
     public function exists(string $path): bool
     {
         $response = $this->request('HEAD', $path);
-        return $response['status'] === HttpStatus::Ok->value;
+        return $this->isPresent($response['status'], 'HEAD', $path);
+    }
+
+    /**
+     * What a response status means for an object: present, absent, or neither.
+     *
+     * Only 404 is absence. A 403, a 429 and a 5xx are the store telling us it
+     * could not answer, and reporting those as "not found" is how an outage or
+     * a revoked credential comes to look like a deleted file — the caller stops
+     * retrying, and goes looking for who removed the object.
+     */
+    private function isPresent(int $status, string $method, string $path): bool
+    {
+        if ($status >= HttpStatus::Ok->value && $status < HttpStatus::MultipleChoices->value) {
+            return true;
+        }
+
+        if ($status === HttpStatus::NotFound->value) {
+            return false;
+        }
+
+        throw StorageException::requestFailed('S3', $method, $path, $status);
     }
 
     public function url(string $path): string
@@ -74,7 +97,7 @@ class S3Driver implements StorageObjectStoreInterface
     public function stat(string $path): ?StoredObjectMetadata
     {
         $response = $this->requestWithHeaders('HEAD', $path);
-        if ($response['status'] !== HttpStatus::Ok->value) {
+        if (!$this->isPresent($response['status'], 'HEAD', $path)) {
             return null;
         }
 
@@ -100,7 +123,7 @@ class S3Driver implements StorageObjectStoreInterface
     public function readStream(string $path)
     {
         $response = $this->request('GET', $path);
-        if ($response['status'] !== HttpStatus::Ok->value) {
+        if (!$this->isPresent($response['status'], 'GET', $path)) {
             return null;
         }
 

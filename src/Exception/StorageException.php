@@ -24,4 +24,18 @@ final class StorageException extends \RuntimeException
     {
         return new self("Storage transport failed on {$method} '{$path}': {$reason}");
     }
+
+    /**
+     * A remote store answered, and the answer was neither success nor a plain
+     * "not there". Carries the operation and the status so a caller can tell an
+     * outage from a deletion and decide whether retrying makes sense.
+     *
+     * The response BODY is deliberately not included: on S3 it carries bucket
+     * policy detail, request ids and occasionally signed material, and this
+     * message reaches logs.
+     */
+    public static function requestFailed(string $driver, string $method, string $path, int $status): self
+    {
+        return new self("{$driver} {$method} '{$path}' failed with HTTP {$status}");
+    }
 }

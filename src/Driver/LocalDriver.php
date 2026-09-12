@@ -7,11 +7,23 @@ namespace Semitexa\Storage\Driver;
 use Semitexa\Core\Environment;
 use Semitexa\Storage\Contract\StorageObjectStoreInterface;
 use Semitexa\Storage\Exception\StorageException;
+use Semitexa\Storage\Value\LegacyMetadataMigrationReport;
 use Semitexa\Storage\Value\StoredObjectDescriptor;
 use Semitexa\Storage\Value\StoredObjectMetadata;
 
 final class LocalDriver implements StorageObjectStoreInterface
 {
+    /**
+     * Metadata subtree, reserved inside the storage root. It is NOT addressable
+     * through the object API: a caller key resolving into it is refused, which
+     * is what keeps driver bookkeeping and caller objects from overwriting each
+     * other. Metadata for `a/b` lives at `<root>/.meta/a/b.json`.
+     */
+    private const METADATA_DIR = '.meta';
+
+    /** The filename the pre-move layout used, kept readable but never written. */
+    private const LEGACY_SIDECAR_SUFFIX = '.meta.json';
+
     private readonly string $basePath;
 
     public function __construct(?string $basePath = null)
@@ -32,10 +44,11 @@ final class LocalDriver implements StorageObjectStoreInterface
         if (@file_put_contents($fullPath, $contents) === false) {
             throw StorageException::writeFailed($path, 'file_put_contents failed (disk full, permissions, or path is a directory)');
         }
-        // The sidecar carries only the MIME type, which is re-derivable via
-        // finfo on read, so a sidecar write failure is not data loss and stays
-        // best-effort — the object itself is already durably written above.
-        $this->writeSidecarMetadata($fullPath, $mimeType);
+        // The metadata carries only the MIME type, which is re-derivable via
+        // finfo on read, so a failure to WRITE it is not data loss and stays
+        // best-effort — the object itself is already durably written above. A
+        // metadata path that escapes the root is a different matter and throws.
+        $this->writeMetadata($path, $mimeType);
     }
 
     public function get(string $path): ?string
@@ -54,7 +67,7 @@ final class LocalDriver implements StorageObjectStoreInterface
             return false;
         }
         $result = unlink($fullPath);
-        $this->deleteSidecarMetadata($fullPath);
+        $this->deleteMetadata($path);
         return $result;
     }
 
@@ -92,7 +105,7 @@ final class LocalDriver implements StorageObjectStoreInterface
             path: $path,
             exists: true,
             size: (int) filesize($fullPath),
-            mimeType: $this->resolveMimeType($fullPath),
+            mimeType: $this->resolveMimeType($path, $fullPath),
             lastModifiedAt: (new \DateTimeImmutable())->setTimestamp((int) filemtime($fullPath)),
             checksum: null,
         );
@@ -129,6 +142,117 @@ final class LocalDriver implements StorageObjectStoreInterface
         );
     }
 
+    /**
+     * Move metadata written in the pre-`.meta/` layout into the reserved
+     * subtree, so the leftovers stop showing up as objects in the caller's
+     * namespace.
+     *
+     * Dry by default: nothing is touched unless $apply is true, because a
+     * legacy sidecar and a caller's own object are the same kind of file and
+     * only the operator knows their data. Two conditions must BOTH hold before
+     * a file is treated as bookkeeping rather than content:
+     *
+     *   - it decodes to exactly `{"mimeType": "<string>"}`, the only shape this
+     *     driver ever wrote, and
+     *   - the object it claims to describe actually exists.
+     *
+     * Anything else is reported as skipped and left in place. An orphan whose
+     * object is gone is skipped too: deleting it would be a guess.
+     *
+     * Idempotent — a second run finds nothing left to move.
+     */
+    public function migrateLegacyMetadata(bool $apply = false): LegacyMetadataMigrationReport
+    {
+        $root = realpath($this->basePath);
+        if ($root === false) {
+            return new LegacyMetadataMigrationReport(applied: $apply, moved: [], skipped: [], alreadyMigrated: 0);
+        }
+
+        $moved = [];
+        $skipped = [];
+        $alreadyMigrated = 0;
+
+        foreach ($this->legacySidecars($root) as $sidecar) {
+            $objectPath = substr($sidecar, 0, -strlen(self::LEGACY_SIDECAR_SUFFIX));
+            $key = $this->relativeKey($objectPath);
+
+            if (!is_file($objectPath)) {
+                $skipped[$sidecar] = 'no object of that name — an orphan, or a caller object in its own right';
+                continue;
+            }
+
+            if ($this->readMimeTypeFrom($sidecar, strict: true) === null) {
+                $skipped[$sidecar] = 'not the shape this driver wrote — treated as a caller object';
+                continue;
+            }
+
+            $target = $this->basePath . '/' . self::METADATA_DIR . '/' . $key . '.json';
+            if (is_file($target)) {
+                $alreadyMigrated++;
+                if ($apply) {
+                    @unlink($sidecar);
+                }
+                continue;
+            }
+
+            if (!$apply) {
+                $moved[] = $key;
+                continue;
+            }
+
+            $dir = dirname($target);
+            if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+                $skipped[$sidecar] = "could not create {$dir}";
+                continue;
+            }
+
+            if (!@rename($sidecar, $target)) {
+                $skipped[$sidecar] = 'rename failed';
+                continue;
+            }
+
+            $moved[] = $key;
+        }
+
+        return new LegacyMetadataMigrationReport(
+            applied: $apply,
+            moved: $moved,
+            skipped: $skipped,
+            alreadyMigrated: $alreadyMigrated,
+        );
+    }
+
+    /**
+     * Every `*.meta.json` under the root, except inside the reserved subtree.
+     *
+     * @return list<string>
+     */
+    private function legacySidecars(string $root): array
+    {
+        $found = [];
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS | \FilesystemIterator::CURRENT_AS_PATHNAME),
+            \RecursiveIteratorIterator::SELF_FIRST,
+        );
+
+        $reserved = $root . '/' . self::METADATA_DIR;
+        foreach ($iterator as $path) {
+            if (!is_string($path) || !is_file($path)) {
+                continue;
+            }
+            if ($path === $reserved || str_starts_with($path, $reserved . '/')) {
+                continue;
+            }
+            if (str_ends_with($path, self::LEGACY_SIDECAR_SUFFIX)) {
+                $found[] = $path;
+            }
+        }
+
+        sort($found);
+
+        return $found;
+    }
+
     private function fullPath(string $path): string
     {
         // Confine to the storage root. Callers pass server-generated keys today,
@@ -143,7 +267,89 @@ final class LocalDriver implements StorageObjectStoreInterface
             throw StorageException::writeFailed($path, 'resolved path escapes the storage root');
         }
 
+        // The metadata subtree is the driver's own. Refusing it here — after
+        // normalisation, so `./.meta/x` and `a/../.meta/x` are caught too —
+        // is what makes the separation real rather than conventional. Loudly,
+        // because a caller whose key is refused needs to know why.
+        $relative = $this->relativeKey($full);
+        if ($relative === self::METADATA_DIR || str_starts_with($relative, self::METADATA_DIR . '/')) {
+            throw StorageException::writeFailed(
+                $path,
+                sprintf("'%s/' is reserved for object metadata and cannot be used as a key", self::METADATA_DIR)
+            );
+        }
+
+        return $this->confine($full, $path);
+    }
+
+    /**
+     * Require the path to resolve inside the canonical root, not merely to spell
+     * itself that way. The lexical check above collapses `..` in the STRING; it
+     * says nothing about a symlink already sitting inside the root, through
+     * which a perfectly innocent-looking key lands somewhere else entirely.
+     *
+     * RESIDUAL RISK, stated rather than papered over: realpath() answers about
+     * the filesystem as it was a moment ago. Between this check and the open
+     * that follows, a writer with access to the storage root can swap a
+     * directory for a link — the classic TOCTOU. Closing that needs openat()
+     * with O_NOFOLLOW on a directory descriptor, which PHP does not expose. So
+     * this raises the cost of an attack that already requires filesystem
+     * access; it is not a boundary to lean on.
+     */
+    private function confine(string $full, string $key): string
+    {
+        $root = realpath($this->basePath);
+        if ($root === false) {
+            // The root does not exist yet, so there is nothing inside it to
+            // walk through. The lexical check is all there is to enforce.
+            return $full;
+        }
+
+        // A link AT the leaf must be resolved before anything opens it, and a
+        // DANGLING one refused: writing through a dangling link creates its
+        // target, wherever that points.
+        if (is_link($full)) {
+            $target = realpath($full);
+            if ($target === false || !self::isInside($target, $root)) {
+                throw StorageException::writeFailed($key, 'resolved path escapes the storage root');
+            }
+
+            return $full;
+        }
+
+        // Otherwise resolve the deepest part that exists. realpath() collapses
+        // every symlink in that prefix, so one canonical answer covers the whole
+        // ancestry — no need to walk it link by link.
+        $existing = $full;
+        while (!file_exists($existing)) {
+            $parent = dirname($existing);
+            if ($parent === $existing) {
+                break;
+            }
+            $existing = $parent;
+        }
+
+        $real = realpath($existing);
+        if ($real === false || !self::isInside($real, $root)) {
+            throw StorageException::writeFailed($key, 'resolved path escapes the storage root');
+        }
+
         return $full;
+    }
+
+    private static function isInside(string $path, string $root): bool
+    {
+        return $path === $root || str_starts_with($path, $root . '/');
+    }
+
+    /** The caller-visible key a resolved absolute path corresponds to. */
+    private function relativeKey(string $fullPath): string
+    {
+        if ($fullPath === $this->basePath) {
+            return '';
+        }
+
+        return substr($fullPath, strlen($this->basePath) + 1);
     }
 
     /**
@@ -168,47 +374,94 @@ final class LocalDriver implements StorageObjectStoreInterface
         return ($isAbsolute ? '/' : '') . implode('/', $parts);
     }
 
-    private function sidecarPath(string $fullPath): string
+    /**
+     * Where the metadata for a caller key lives. Inside the reserved subtree,
+     * mirroring the object's own path, so nested keys stay nested and two
+     * objects can never share one metadata file.
+     */
+    private function metadataPath(string $path): string
     {
-        return $fullPath . '.meta.json';
+        $relative = $this->relativeKey($this->fullPath($path));
+        $metadataPath = $this->basePath . '/' . self::METADATA_DIR . '/' . $relative . '.json';
+
+        // The reserved subtree is the driver's own, which is exactly why a link
+        // planted inside it must not be followed. Unlike an ordinary metadata
+        // write failure this is refused loudly: it means someone has been
+        // rearranging the storage root, and carrying on quietly is worse than
+        // failing the put.
+        return $this->confine($metadataPath, $path);
     }
 
-    private function writeSidecarMetadata(string $fullPath, string $mimeType): void
+    private function writeMetadata(string $path, string $mimeType): void
     {
-        $sidecarPath = $this->sidecarPath($fullPath);
-        $data = json_encode(['mimeType' => $mimeType], JSON_THROW_ON_ERROR);
-        file_put_contents($sidecarPath, $data);
-    }
-
-    private function deleteSidecarMetadata(string $fullPath): void
-    {
-        $sidecarPath = $this->sidecarPath($fullPath);
-        if (file_exists($sidecarPath)) {
-            unlink($sidecarPath);
+        $metadataPath = $this->metadataPath($path);
+        $dir = dirname($metadataPath);
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+            return;
         }
+        $data = json_encode(['mimeType' => $mimeType], JSON_THROW_ON_ERROR);
+        @file_put_contents($metadataPath, $data);
     }
 
-    private function readSidecarMimeType(string $fullPath): ?string
+    private function deleteMetadata(string $path): void
     {
-        $sidecarPath = $this->sidecarPath($fullPath);
-        if (!file_exists($sidecarPath)) {
+        $metadataPath = $this->metadataPath($path);
+        if (is_file($metadataPath)) {
+            @unlink($metadataPath);
+        }
+
+        // A legacy `<key>.meta.json` is deliberately left alone. After this
+        // change it is an ordinary object in the caller's namespace, and
+        // deleting it here would be the very bug this layout removes — one
+        // object's delete reaching into another's. Leftovers from the old
+        // layout stay visible until an operator clears them.
+    }
+
+    private function readStoredMimeType(string $path): ?string
+    {
+        $mime = $this->readMimeTypeFrom($this->metadataPath($path));
+        if ($mime !== null) {
+            return $mime;
+        }
+
+        // Objects written before the move still have their metadata beside
+        // them. Read it, but only when it has the exact shape this driver used
+        // to write: one key, a string value. Anything richer is a caller's own
+        // JSON object that merely shares the name, and must not be read as
+        // bookkeeping.
+        return $this->readMimeTypeFrom($this->fullPath($path) . self::LEGACY_SIDECAR_SUFFIX, strict: true);
+    }
+
+    private function readMimeTypeFrom(string $file, bool $strict = false): ?string
+    {
+        if (!is_file($file)) {
             return null;
         }
 
-        $contents = file_get_contents($sidecarPath);
+        $contents = @file_get_contents($file);
         if ($contents === false) {
             return null;
         }
 
         $data = json_decode($contents, true);
-        return is_array($data) ? ($data['mimeType'] ?? null) : null;
+        if (!is_array($data)) {
+            return null;
+        }
+
+        if ($strict && array_keys($data) !== ['mimeType']) {
+            return null;
+        }
+
+        $mime = $data['mimeType'] ?? null;
+
+        return is_string($mime) && $mime !== '' ? $mime : null;
     }
 
-    private function resolveMimeType(string $fullPath): string
+    private function resolveMimeType(string $path, string $fullPath): string
     {
-        $sidecarMime = $this->readSidecarMimeType($fullPath);
-        if ($sidecarMime !== null) {
-            return $sidecarMime;
+        $stored = $this->readStoredMimeType($path);
+        if ($stored !== null) {
+            return $stored;
         }
 
         $finfo = new \finfo(FILEINFO_MIME_TYPE);
