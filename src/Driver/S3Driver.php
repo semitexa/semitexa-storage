@@ -58,7 +58,9 @@ class S3Driver implements StorageObjectStoreInterface
     {
         $response = $this->request('DELETE', $path);
         // S3 answers 204 whether or not the object was there, so a 2xx is a
-        // completed delete. A 404 is the same outcome stated differently.
+        // completed delete. A 404 returns false — the same answer LocalDriver
+        // gives for an object that was not there to delete, so "did this call
+        // remove something" means one thing across drivers.
         return $this->isPresent($response['status'], 'DELETE', $path);
     }
 
@@ -71,10 +73,19 @@ class S3Driver implements StorageObjectStoreInterface
     /**
      * What a response status means for an object: present, absent, or neither.
      *
-     * Only 404 is absence. A 403, a 429 and a 5xx are the store telling us it
-     * could not answer, and reporting those as "not found" is how an outage or
-     * a revoked credential comes to look like a deleted file — the caller stops
-     * retrying, and goes looking for who removed the object.
+     * Only 404 is absence by default. A 403, a 429 and a 5xx are the store
+     * telling us it could not answer, and reporting those as "not found" is how
+     * an outage or a revoked credential comes to look like a deleted file — the
+     * caller stops retrying and goes looking for who removed the object.
+     *
+     * EXCEPT that S3 answers 403 for a MISSING key when the principal has no
+     * `s3:ListBucket` — the common object-level-only policy — so on such a
+     * bucket the two are genuinely indistinguishable from the status alone, and
+     * strictness turns every ordinary miss into an exception. Deployments in
+     * that shape set STORAGE_S3_MISSING_IS_FORBIDDEN=1 and get the old,
+     * lenient reading of 403 back. It is opt-in rather than the default because
+     * the alternative is silence about real failures; the exception message
+     * names the flag so nobody has to find this comment first.
      */
     private function isPresent(int $status, string $method, string $path): bool
     {
@@ -86,7 +97,26 @@ class S3Driver implements StorageObjectStoreInterface
             return false;
         }
 
-        throw StorageException::requestFailed('S3', $method, $path, $status);
+        if ($status === HttpStatus::Forbidden->value && self::forbiddenMeansMissing()) {
+            return false;
+        }
+
+        throw StorageException::requestFailed('S3', $method, $path, $status, self::hintFor($status));
+    }
+
+    private static function forbiddenMeansMissing(): bool
+    {
+        $flag = Environment::getEnvValue('STORAGE_S3_MISSING_IS_FORBIDDEN', '');
+
+        return is_string($flag) && in_array(strtolower(trim($flag)), ['1', 'true', 'yes', 'on'], true);
+    }
+
+    private static function hintFor(int $status): ?string
+    {
+        return $status === HttpStatus::Forbidden->value
+            ? 'a bucket policy without s3:ListBucket answers 403 for a missing key too; '
+                . 'set STORAGE_S3_MISSING_IS_FORBIDDEN=1 to read 403 as absent'
+            : null;
     }
 
     public function url(string $path): string

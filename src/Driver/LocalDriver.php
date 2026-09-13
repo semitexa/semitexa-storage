@@ -53,7 +53,7 @@ final class LocalDriver implements StorageObjectStoreInterface
 
     public function get(string $path): ?string
     {
-        $fullPath = $this->fullPath($path);
+        $fullPath = $this->fullPath($path, forWrite: false);
         if (!file_exists($fullPath)) {
             return null;
         }
@@ -73,7 +73,7 @@ final class LocalDriver implements StorageObjectStoreInterface
 
     public function exists(string $path): bool
     {
-        return file_exists($this->fullPath($path));
+        return file_exists($this->fullPath($path, forWrite: false));
     }
 
     public function url(string $path): string
@@ -96,7 +96,7 @@ final class LocalDriver implements StorageObjectStoreInterface
 
     public function stat(string $path): ?StoredObjectMetadata
     {
-        $fullPath = $this->fullPath($path);
+        $fullPath = $this->fullPath($path, forWrite: false);
         if (!file_exists($fullPath)) {
             return null;
         }
@@ -116,7 +116,7 @@ final class LocalDriver implements StorageObjectStoreInterface
      */
     public function readStream(string $path)
     {
-        $fullPath = $this->fullPath($path);
+        $fullPath = $this->fullPath($path, forWrite: false);
         if (!file_exists($fullPath)) {
             return null;
         }
@@ -174,7 +174,13 @@ final class LocalDriver implements StorageObjectStoreInterface
 
         foreach ($this->legacySidecars($root) as $sidecar) {
             $objectPath = substr($sidecar, 0, -strlen(self::LEGACY_SIDECAR_SUFFIX));
-            $key = $this->relativeKey($objectPath);
+            // Sliced by the SAME root the walk enumerated. Slicing by the
+            // configured basePath instead mangles every key whenever the root
+            // is reached through a symlink — the standard current -> releases
+            // deploy layout — and when the configured path is the LONGER of
+            // the two the key comes out empty, which turned the first sidecar
+            // into .meta/.json and deleted every one after it.
+            $key = $objectPath === $root ? '' : substr($objectPath, strlen($root) + 1);
 
             if (!is_file($objectPath)) {
                 $skipped[$sidecar] = 'no object of that name — an orphan, or a caller object in its own right';
@@ -253,7 +259,7 @@ final class LocalDriver implements StorageObjectStoreInterface
         return $found;
     }
 
-    private function fullPath(string $path): string
+    private function fullPath(string $path, bool $forWrite = true): string
     {
         // Confine to the storage root. Callers pass server-generated keys today,
         // but the driver must not trust its caller: a `$path` containing `../`
@@ -279,7 +285,7 @@ final class LocalDriver implements StorageObjectStoreInterface
             );
         }
 
-        return $this->confine($full, $path);
+        return $this->confine($full, $path, $forWrite);
     }
 
     /**
@@ -296,7 +302,7 @@ final class LocalDriver implements StorageObjectStoreInterface
      * this raises the cost of an attack that already requires filesystem
      * access; it is not a boundary to lean on.
      */
-    private function confine(string $full, string $key): string
+    private function confine(string $full, string $key, bool $forWrite = true): string
     {
         $root = realpath($this->basePath);
         if ($root === false) {
@@ -310,7 +316,21 @@ final class LocalDriver implements StorageObjectStoreInterface
         // target, wherever that points.
         if (is_link($full)) {
             $target = realpath($full);
-            if ($target === false || !self::isInside($target, $root)) {
+
+            if ($target === false) {
+                // Dangling. Writing through it CREATES its target, wherever
+                // that points, so a write is refused — but a READ of it finds
+                // nothing either way, and turning a miss into an exception
+                // would make one broken link in the root a 500 across every
+                // caller that treats absence as normal.
+                if ($forWrite) {
+                    throw StorageException::writeFailed($key, 'resolved path is a dangling symbolic link');
+                }
+
+                return $full;
+            }
+
+            if (!self::isInside($target, $root)) {
                 throw StorageException::writeFailed($key, 'resolved path escapes the storage root');
             }
 

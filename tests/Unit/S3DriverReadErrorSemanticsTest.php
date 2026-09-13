@@ -151,8 +151,54 @@ final class S3DriverReadErrorSemanticsTest extends TestCase
                 'the response body may carry bucket policy or credentials detail and must not be echoed');
         }
     }
-}
 
+    /**
+     * S3 answers 403 for a MISSING key when the principal has no
+     * s3:ListBucket, so on such a bucket strictness turns every ordinary miss
+     * into an exception. The lenient reading is opt-in, and the exception says
+     * how to opt in rather than leaving it to be discovered.
+     */
+    #[Test]
+    public function a_forbidden_read_can_be_read_as_absent_when_the_deployment_says_so(): void
+    {
+        $driver = new FakeReadS3Driver(status: 403);
+
+        putenv('STORAGE_S3_MISSING_IS_FORBIDDEN=1');
+        try {
+            self::assertNull($driver->get('uploads/report.pdf'));
+            self::assertFalse($driver->exists('uploads/report.pdf'));
+            self::assertNull($driver->stat('uploads/report.pdf'));
+        } finally {
+            putenv('STORAGE_S3_MISSING_IS_FORBIDDEN');
+        }
+    }
+
+    #[Test]
+    public function the_forbidden_error_names_the_way_out(): void
+    {
+        $driver = new FakeReadS3Driver(status: 403);
+
+        try {
+            $driver->get('uploads/report.pdf');
+            self::fail('expected a StorageException');
+        } catch (StorageException $e) {
+            self::assertStringContainsString('s3:ListBucket', $e->getMessage());
+            self::assertStringContainsString('STORAGE_S3_MISSING_IS_FORBIDDEN', $e->getMessage());
+        }
+    }
+
+    #[Test]
+    public function the_opt_out_does_not_excuse_any_other_status(): void
+    {
+        putenv('STORAGE_S3_MISSING_IS_FORBIDDEN=1');
+        try {
+            $this->expectException(StorageException::class);
+            (new FakeReadS3Driver(status: 500))->get('uploads/report.pdf');
+        } finally {
+            putenv('STORAGE_S3_MISSING_IS_FORBIDDEN');
+        }
+    }
+}
 /**
  * Canned HTTP result, no network — the same seam the write-failure test uses.
  */

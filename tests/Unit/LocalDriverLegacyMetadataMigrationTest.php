@@ -160,4 +160,50 @@ final class LocalDriverLegacyMetadataMigrationTest extends TestCase
 
         self::assertTrue($driver->migrateLegacyMetadata()->isEmpty());
     }
+
+    /**
+     * A storage root reached through a symlink is the normal deploy layout
+     * (current -> releases/<ts>), and the migration enumerated canonical paths
+     * while slicing keys by the configured one.
+     *
+     * MEASURED before the fix, with root <tmp>/current/uploads: key
+     * 'docs/a.pdf' migrated as 'loads/docs/a.pdf', the metadata landed where
+     * the read path never looks, and stat() fell back from application/pdf to
+     * text/plain. With the configured path the LONGER of the two the key came
+     * out empty, which renamed the first sidecar to .meta/.json and deleted
+     * every one after it.
+     */
+    #[Test]
+    public function a_root_reached_through_a_symlink_migrates_to_the_right_keys(): void
+    {
+        $real = $this->root . '/real';
+        $link = $this->root . '/via-link';
+        mkdir($real . '/docs', 0777, true);
+        symlink($real, $link);
+
+        file_put_contents($real . '/docs/a.pdf', 'BODY');
+        file_put_contents($real . '/docs/a.pdf.meta.json', json_encode(['mimeType' => 'application/pdf']));
+
+        $driver = new LocalDriver($link);
+        $report = $driver->migrateLegacyMetadata(apply: true);
+
+        self::assertSame(['docs/a.pdf'], $report->moved);
+        self::assertFileExists($real . '/.meta/docs/a.pdf.json');
+        self::assertSame('application/pdf', $driver->stat('docs/a.pdf')?->mimeType, 'the read path must find what the migration wrote');
+    }
+
+    #[Test]
+    public function a_dry_run_names_the_leftovers_it_would_remove(): void
+    {
+        $driver = new LocalDriver($this->root);
+        $driver->put('thing.png', 'body', 'image/png');
+        // A leftover beside an object whose metadata is already in .meta/.
+        file_put_contents($this->root . '/thing.png.meta.json', json_encode(['mimeType' => 'image/gif']));
+
+        $report = $driver->migrateLegacyMetadata();
+
+        self::assertSame(1, $report->alreadyMigrated);
+        self::assertFalse($report->applied);
+        self::assertTrue(is_file($this->root . '/thing.png.meta.json'), 'a dry run removes nothing');
+    }
 }

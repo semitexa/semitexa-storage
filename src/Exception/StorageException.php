@@ -34,8 +34,10 @@ final class StorageException extends \RuntimeException
      * policy detail, request ids and occasionally signed material, and this
      * message reaches logs.
      */
-    public static function requestFailed(string $driver, string $method, string $path, int $status): self
+    public static function requestFailed(string $driver, string $method, string $path, int $status, ?string $hint = null): self
     {
-        return new self("{$driver} {$method} '{$path}' failed with HTTP {$status}");
+        $message = "{$driver} {$method} '{$path}' failed with HTTP {$status}";
+
+        return new self($hint === null ? $message : $message . ' — ' . $hint);
     }
 }

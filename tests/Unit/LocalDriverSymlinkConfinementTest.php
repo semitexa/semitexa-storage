@@ -179,4 +179,33 @@ final class LocalDriverSymlinkConfinementTest extends TestCase
         $this->expectException(StorageException::class);
         $driver->put('../outside/probe.txt', 'escaped', 'text/plain');
     }
+
+    /**
+     * A dangling link is nothing to read. Refusing a READ turned one broken
+     * link in the storage root into a 500 for every caller that treats a miss
+     * as normal — media and mail both do. Writing through it still refuses,
+     * because a write CREATES its target.
+     */
+    #[Test]
+    public function a_dangling_link_reads_as_absent_rather_than_throwing(): void
+    {
+        symlink($this->outside . '/never-existed.txt', $this->root . '/dangling.txt');
+        $driver = new LocalDriver($this->root);
+
+        self::assertNull($driver->get('dangling.txt'));
+        self::assertFalse($driver->exists('dangling.txt'));
+        self::assertNull($driver->stat('dangling.txt'));
+        self::assertNull($driver->readStream('dangling.txt'));
+    }
+
+    #[Test]
+    public function a_link_pointing_outside_is_still_refused_on_a_read(): void
+    {
+        file_put_contents($this->outside . '/secret.txt', 'control-fixture');
+        symlink($this->outside . '/secret.txt', $this->root . '/alias.txt');
+        $driver = new LocalDriver($this->root);
+
+        $this->expectException(StorageException::class);
+        $driver->get('alias.txt');
+    }
 }
