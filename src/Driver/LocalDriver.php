@@ -35,6 +35,13 @@ final class LocalDriver implements StorageObjectStoreInterface
 
     public function put(string $path, string $contents, string $mimeType): void
     {
+        // Before the object is touched. A structural metadata collision fails
+        // the put, and failing it AFTER file_put_contents left the caller with
+        // an exception and the new contents visible through get() — so a retry
+        // or a rollback written against that exception was working from a false
+        // premise. Raised in review of storage#20.
+        $this->assertMetadataWritable($path);
+
         $fullPath = $this->fullPath($path);
         $dir = dirname($fullPath);
         // The `!mkdir && !is_dir` guard tolerates a concurrent writer creating
@@ -192,6 +199,18 @@ final class LocalDriver implements StorageObjectStoreInterface
 
             if (!is_file($objectPath)) {
                 $skipped[$sidecar] = 'no object of that name — an orphan, or a caller object in its own right';
+                continue;
+            }
+
+            // A link is never something this driver wrote, whatever it points
+            // at. is_file() and readMimeTypeFrom() both FOLLOW it, so a
+            // caller's own `*.meta.json` symlink aimed at any file of the right
+            // shape qualified as driver metadata — and --apply then renamed the
+            // link itself into .meta/, deleting a caller-visible key and
+            // leaving a relative link pointing at nothing from its new depth.
+            // Raised in review of storage#20.
+            if (is_link($sidecar)) {
+                $skipped[$sidecar] = 'a symbolic link — this driver never wrote one, so it is the caller\'s object';
                 continue;
             }
 
@@ -443,6 +462,32 @@ final class LocalDriver implements StorageObjectStoreInterface
         // rearranging the storage root, and carrying on quietly is worse than
         // failing the put.
         return $this->confine($metadataPath, $path);
+    }
+
+    /**
+     * Can metadata for this key exist at all?
+     *
+     * Metadata for key `report` is a FILE at .meta/report.json, and metadata
+     * for a key under `report.json/` needs that same path to be a DIRECTORY.
+     * One of the two always loses, and that is a property of the two keys, not
+     * of this write — so it is decided before anything is written, and the
+     * object is left exactly as it was.
+     *
+     * writeMetadata() still checks: this says what is true now, and a
+     * concurrent writer can make it false in between.
+     */
+    private function assertMetadataWritable(string $path): void
+    {
+        $metadataPath = $this->metadataPath($path);
+
+        if (is_dir($metadataPath)) {
+            throw StorageException::writeFailed($path, self::COLLISION_REASON . $metadataPath);
+        }
+
+        $dir = dirname($metadataPath);
+        if (!is_dir($dir) && self::hasFileAncestor($dir)) {
+            throw StorageException::writeFailed($path, self::COLLISION_REASON . $dir);
+        }
     }
 
     private function writeMetadata(string $path, string $mimeType): void

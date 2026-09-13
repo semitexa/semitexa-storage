@@ -205,6 +205,43 @@ final class LocalDriverMetadataIsolationTest extends TestCase
         }
     }
 
+    /**
+     * The refusal has to come BEFORE the object is written, or the caller gets
+     * an exception and the new contents at the same time — and a retry or a
+     * rollback written against that exception is working from a false premise.
+     * Raised in review of storage#20.
+     */
+    #[Test]
+    public function a_refused_write_creates_no_object_at_all(): void
+    {
+        $driver = new LocalDriver($this->base);
+        $driver->put('report', 'body', 'text/plain');
+
+        try {
+            $driver->put('report.json/child', 'body', 'text/csv');
+            self::fail('the collision was not named');
+        } catch (StorageException) {
+            self::assertFalse($driver->exists('report.json/child'), 'the object was written and then disowned');
+            self::assertNull($driver->get('report.json/child'));
+        }
+    }
+
+    /** The same from the other side, where the object that already exists is the nested one. */
+    #[Test]
+    public function a_refused_write_does_not_overwrite_what_is_already_there(): void
+    {
+        $driver = new LocalDriver($this->base);
+        $driver->put('report.json/child', 'first', 'text/csv');
+
+        try {
+            $driver->put('report', 'body', 'application/x-custom');
+            self::fail('the collision was not named');
+        } catch (StorageException) {
+            self::assertFalse($driver->exists('report'));
+            self::assertSame('first', $driver->get('report.json/child'), 'the neighbour was disturbed');
+        }
+    }
+
     #[Test]
     public function an_ordinary_nested_pair_is_unaffected(): void
     {

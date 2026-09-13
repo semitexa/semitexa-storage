@@ -235,6 +235,38 @@ final class LocalDriverLegacyMetadataMigrationTest extends TestCase
         }
     }
 
+    /**
+     * A caller's own key that happens to be a symlink pointing at something of
+     * the legacy shape.
+     *
+     * is_file() and readMimeTypeFrom() both FOLLOW the link, so it passed for
+     * driver metadata — and --apply renamed the LINK into .meta/, which deletes
+     * a key the caller can see and, for a relative link, leaves it pointing at
+     * nothing from its new depth. This driver has never written a symlink, so
+     * being one is enough to disqualify it. Raised in review of storage#20.
+     */
+    #[Test]
+    public function a_symlinked_sidecar_is_the_callers_object_whatever_it_points_at(): void
+    {
+        // A genuine legacy pair, so the link has something of the right shape
+        // to aim at.
+        $this->legacyObject('real.png');
+        file_put_contents($this->root . '/decoy.png', 'body');
+        symlink($this->root . '/real.png.meta.json', $this->root . '/decoy.png.meta.json');
+
+        $report = (new LocalDriver($this->root))->migrateLegacyMetadata(apply: true);
+
+        self::assertTrue(
+            is_link($this->root . '/decoy.png.meta.json'),
+            'the caller\'s key was moved into the reserved subtree and is gone from where they put it',
+        );
+        self::assertNotContains('decoy.png', $report->moved);
+        self::assertArrayHasKey($this->root . '/decoy.png.meta.json', $report->skipped);
+        self::assertStringContainsString('symbolic link', $report->skipped[$this->root . '/decoy.png.meta.json']);
+
+        self::assertContains('real.png', $report->moved, 'the ordinary pair beside it still migrates');
+    }
+
     #[Test]
     public function a_root_that_cannot_be_resolved_is_not_an_empty_one(): void
     {
