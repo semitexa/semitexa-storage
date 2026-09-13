@@ -24,6 +24,8 @@ final class LocalDriver implements StorageObjectStoreInterface
     /** The filename the pre-move layout used, kept readable but never written. */
     private const LEGACY_SIDECAR_SUFFIX = '.meta.json';
 
+    private const COLLISION_REASON = 'these two keys cannot both carry metadata; another key already occupies ';
+
     private readonly string $basePath;
 
     public function __construct(?string $basePath = null)
@@ -209,12 +211,27 @@ final class LocalDriver implements StorageObjectStoreInterface
                 continue;
             }
 
+            // is_file() alone was too weak: an empty or partial metadata file
+            // from an earlier best-effort write counted as "already migrated",
+            // and --apply then deleted the VALID legacy copy, leaving stat()
+            // with nothing but finfo. The target only counts if it parses as
+            // the shape this driver writes.
             if (is_file($target)) {
-                $alreadyMigrated++;
-                if ($apply) {
-                    @unlink($sidecar);
+                if ($this->readMimeTypeFrom($target) !== null) {
+                    $alreadyMigrated++;
+                    if ($apply) {
+                        @unlink($sidecar);
+                    }
+                    continue;
                 }
-                continue;
+
+                if (!$apply) {
+                    $moved[] = $key;
+                    continue;
+                }
+
+                // Unusable. The legacy copy is the good one, so it replaces it.
+                @unlink($target);
             }
 
             if (!$apply) {
@@ -443,13 +460,18 @@ final class LocalDriver implements StorageObjectStoreInterface
             // So a structural conflict is named, while a full disk or a
             // read-only mount stays best-effort as the docblock promises.
             if (self::hasFileAncestor($dir)) {
-                throw StorageException::writeFailed(
-                    $path,
-                    'metadata for another key occupies ' . $dir . '; these two keys cannot both carry metadata',
-                );
+                throw StorageException::writeFailed($path, self::COLLISION_REASON . $dir);
             }
 
             return;
+        }
+
+        // The same conflict, arrived at from the other side: a key under
+        // `report.json/` was stored FIRST, so .meta/report.json is already a
+        // directory and the metadata for `report` cannot be a file there. The
+        // mkdir branch above never runs, because its parent exists.
+        if (is_dir($metadataPath)) {
+            throw StorageException::writeFailed($path, self::COLLISION_REASON . $metadataPath);
         }
         $data = json_encode(['mimeType' => $mimeType], JSON_THROW_ON_ERROR);
         @file_put_contents($metadataPath, $data);

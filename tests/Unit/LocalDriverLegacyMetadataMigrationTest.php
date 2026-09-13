@@ -243,4 +243,23 @@ final class LocalDriverLegacyMetadataMigrationTest extends TestCase
         self::assertTrue($report->isEmpty());
         self::assertNotNull($report->unreadableRoot, 'an empty report needs to say whether anything was read');
     }
+
+    /**
+     * A metadata file that does not parse has migrated nothing. Counting it as
+     * done deleted the valid legacy copy and left stat() with only finfo.
+     */
+    #[Test]
+    public function an_unusable_target_does_not_count_as_migrated(): void
+    {
+        $this->legacyObject('thing.png', 'image/png');
+        @mkdir($this->root . '/.meta', 0777, true);
+        file_put_contents($this->root . '/.meta/thing.png.json', '');
+
+        $driver = new LocalDriver($this->root);
+        $report = $driver->migrateLegacyMetadata(apply: true);
+
+        self::assertSame(['thing.png'], $report->moved);
+        self::assertSame(0, $report->alreadyMigrated);
+        self::assertSame('image/png', $driver->stat('thing.png')?->mimeType, 'the good copy wins');
+    }
 }

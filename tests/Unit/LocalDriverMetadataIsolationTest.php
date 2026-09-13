@@ -215,4 +215,19 @@ final class LocalDriverMetadataIsolationTest extends TestCase
         self::assertSame('text/plain', $driver->stat('report')?->mimeType);
         self::assertSame('text/csv', $driver->stat('report-archive/child')?->mimeType);
     }
+
+    /** The same collision reached from the other side: the nested key first. */
+    #[Test]
+    public function the_collision_is_named_in_either_insertion_order(): void
+    {
+        $driver = new LocalDriver($this->base);
+        $driver->put('report.json/child', 'body', 'text/csv');
+
+        try {
+            $driver->put('report', 'body', 'application/x-custom');
+            self::fail('the second key silently lost its metadata');
+        } catch (StorageException $e) {
+            self::assertStringContainsString('cannot both carry metadata', $e->getMessage());
+        }
+    }
 }
