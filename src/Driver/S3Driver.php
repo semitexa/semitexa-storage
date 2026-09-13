@@ -51,19 +51,82 @@ class S3Driver implements StorageObjectStoreInterface
     public function get(string $path): ?string
     {
         $response = $this->request('GET', $path);
-        return $response['status'] === HttpStatus::Ok->value ? $response['body'] : null;
+        return $this->isPresent($response['status'], 'GET', $path) ? $response['body'] : null;
     }
 
     public function delete(string $path): bool
     {
         $response = $this->request('DELETE', $path);
-        return $response['status'] >= HttpStatus::Ok->value && $response['status'] < HttpStatus::MultipleChoices->value;
+        // S3 answers 204 whether or not the object was there, so a 2xx is a
+        // completed delete. A 404 returns false — the same answer LocalDriver
+        // gives for an object that was not there to delete, so "did this call
+        // remove something" means one thing across drivers.
+        return $this->isPresent($response['status'], 'DELETE', $path);
     }
 
     public function exists(string $path): bool
     {
         $response = $this->request('HEAD', $path);
-        return $response['status'] === HttpStatus::Ok->value;
+        return $this->isPresent($response['status'], 'HEAD', $path);
+    }
+
+    /**
+     * What a response status means for an object: present, absent, or neither.
+     *
+     * Only 404 is absence by default. A 403, a 429 and a 5xx are the store
+     * telling us it could not answer, and reporting those as "not found" is how
+     * an outage or a revoked credential comes to look like a deleted file — the
+     * caller stops retrying and goes looking for who removed the object.
+     *
+     * EXCEPT that S3 answers 403 for a MISSING key when the principal has no
+     * `s3:ListBucket` — the common object-level-only policy — so on such a
+     * bucket the two are genuinely indistinguishable from the status alone, and
+     * strictness turns every ordinary miss into an exception. Deployments in
+     * that shape set STORAGE_S3_MISSING_IS_FORBIDDEN=1 and get the old,
+     * lenient reading of 403 back. It is opt-in rather than the default because
+     * the alternative is silence about real failures; the exception message
+     * names the flag so nobody has to find this comment first.
+     *
+     * That escape applies to GET and HEAD alone. DeleteObject answers 204 for a
+     * key that was never there, so nothing about a DELETE 403 is ambiguous.
+     */
+    private function isPresent(int $status, string $method, string $path): bool
+    {
+        if ($status >= HttpStatus::Ok->value && $status < HttpStatus::MultipleChoices->value) {
+            return true;
+        }
+
+        if ($status === HttpStatus::NotFound->value) {
+            return false;
+        }
+
+        // READS only. DeleteObject answers 204 for a key that is not there, so
+        // a 403 on DELETE is a genuine authorization failure and never the
+        // ListBucket ambiguity — routing it through this branch would hide a
+        // revoked delete permission as an ordinary absent object.
+        if ($status === HttpStatus::Forbidden->value
+            && in_array($method, ['GET', 'HEAD'], true)
+            && self::forbiddenMeansMissing()
+        ) {
+            return false;
+        }
+
+        throw StorageException::requestFailed('S3', $method, $path, $status, self::hintFor($status));
+    }
+
+    private static function forbiddenMeansMissing(): bool
+    {
+        $flag = Environment::getEnvValue('STORAGE_S3_MISSING_IS_FORBIDDEN', '');
+
+        return is_string($flag) && in_array(strtolower(trim($flag)), ['1', 'true', 'yes', 'on'], true);
+    }
+
+    private static function hintFor(int $status): ?string
+    {
+        return $status === HttpStatus::Forbidden->value
+            ? 'a bucket policy without s3:ListBucket answers 403 for a missing key too; '
+                . 'set STORAGE_S3_MISSING_IS_FORBIDDEN=1 to read 403 as absent'
+            : null;
     }
 
     public function url(string $path): string
@@ -74,7 +137,7 @@ class S3Driver implements StorageObjectStoreInterface
     public function stat(string $path): ?StoredObjectMetadata
     {
         $response = $this->requestWithHeaders('HEAD', $path);
-        if ($response['status'] !== HttpStatus::Ok->value) {
+        if (!$this->isPresent($response['status'], 'HEAD', $path)) {
             return null;
         }
 
@@ -100,7 +163,7 @@ class S3Driver implements StorageObjectStoreInterface
     public function readStream(string $path)
     {
         $response = $this->request('GET', $path);
-        if ($response['status'] !== HttpStatus::Ok->value) {
+        if (!$this->isPresent($response['status'], 'GET', $path)) {
             return null;
         }
 

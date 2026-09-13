@@ -1,0 +1,56 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Semitexa\Storage\Value;
+
+/**
+ * What a legacy-metadata migration did, or would do.
+ *
+ * Counts alone would not be enough to act on: an operator deciding whether to
+ * run the thing for real needs to see WHICH files were left behind and why, so
+ * the skipped ones are named.
+ */
+final readonly class LegacyMetadataMigrationReport
+{
+    /**
+     * @param list<string>                $moved   object keys whose metadata moved into the reserved subtree
+     * @param array<string, string>       $skipped legacy file path => why it was left alone
+     */
+    public function __construct(
+        public bool $applied,
+        public array $moved,
+        public array $skipped,
+        public int $alreadyMigrated,
+        /**
+         * Why nothing could be looked at, when that is the reason the report is
+         * empty. An empty root and a root that does not resolve produce the
+         * same counts, and only one of them means "you are done".
+         */
+        public ?string $unreadableRoot = null,
+        /**
+         * How many legacy files were actually DELETED — not how many were asked
+         * for. Copying is what $apply does; removing a key from the caller's
+         * namespace is a separate decision, and a dry run takes neither. This
+         * used to carry the intent, so a dry run with removal requested
+         * reported removals that had not happened. Raised in review of
+         * storage#20.
+         */
+        public int $legacyRemoved = 0,
+    ) {}
+
+    public function movedCount(): int
+    {
+        return count($this->moved);
+    }
+
+    public function skippedCount(): int
+    {
+        return count($this->skipped);
+    }
+
+    public function isEmpty(): bool
+    {
+        return $this->moved === [] && $this->skipped === [] && $this->alreadyMigrated === 0;
+    }
+}
