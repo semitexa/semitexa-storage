@@ -22,7 +22,7 @@ Depends on `semitexa/core` and `semitexa/orm`. Used by `semitexa/mail` for attac
 
 ## Notes
 
-Storage paths are automatically namespaced per tenant when tenancy is active. Drivers are stateless and safe for concurrent use in Swoole.
+Storage paths are automatically namespaced per tenant when tenancy is active. Drivers hold no mutable state, so one instance is safe to share between coroutines. They do not serialise writes ACROSS processes: two workers writing the same key race for it and the last write wins, as with any filesystem or object store. One case is worth naming, because it is specific to this driver: two keys whose metadata paths structurally collide (`report` and `report.json/child`) are refused before anything is written, but written at the same moment from two processes, one of them can persist its object and still report the collision. See `LocalDriver::assertMetadataWritable()`.
 
 `LocalDriver` keeps each object's MIME type in a reserved `.meta/` subtree of the storage root, mirroring the object's own path. That subtree is not addressable through the object API: a key resolving into it is refused with a `StorageException`, so driver bookkeeping can never overwrite a caller's object. Any other key is allowed, including one ending in `.meta.json`.
 

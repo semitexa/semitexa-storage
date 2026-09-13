@@ -29,11 +29,14 @@ final readonly class LegacyMetadataMigrationReport
          */
         public ?string $unreadableRoot = null,
         /**
-         * Whether the legacy files were removed as well as copied. Copying is
-         * what $apply does; removing a key from the caller's namespace is a
-         * separate decision, and the report says which one was taken.
+         * How many legacy files were actually DELETED — not how many were asked
+         * for. Copying is what $apply does; removing a key from the caller's
+         * namespace is a separate decision, and a dry run takes neither. This
+         * used to carry the intent, so a dry run with removal requested
+         * reported removals that had not happened. Raised in review of
+         * storage#20.
          */
-        public bool $removedLegacy = false,
+        public int $legacyRemoved = 0,
     ) {}
 
     public function movedCount(): int

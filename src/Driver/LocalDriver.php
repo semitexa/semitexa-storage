@@ -197,6 +197,7 @@ final class LocalDriver implements StorageObjectStoreInterface
         $moved = [];
         $skipped = [];
         $alreadyMigrated = 0;
+        $legacyRemoved = 0;
 
         foreach ($this->legacySidecars($root) as $sidecar) {
             $objectPath = substr($sidecar, 0, -strlen(self::LEGACY_SIDECAR_SUFFIX));
@@ -250,7 +251,14 @@ final class LocalDriver implements StorageObjectStoreInterface
                 if ($this->readMimeTypeFrom($target) !== null) {
                     $alreadyMigrated++;
                     if ($apply && $removeLegacy) {
-                        @unlink($sidecar);
+                        // A failed unlink was dropped here, and the command
+                        // announced the removal anyway. Raised in review of
+                        // storage#20.
+                        if (@unlink($sidecar)) {
+                            $legacyRemoved++;
+                        } else {
+                            $skipped[$sidecar] = 'already migrated, but the legacy file could not be removed';
+                        }
                     }
                     continue;
                 }
@@ -282,10 +290,12 @@ final class LocalDriver implements StorageObjectStoreInterface
                 continue;
             }
 
-            if ($removeLegacy && !@unlink($sidecar)) {
-                $skipped[$sidecar] = 'copied, but the legacy file could not be removed';
-                $moved[] = $key;
-                continue;
+            if ($removeLegacy) {
+                if (@unlink($sidecar)) {
+                    $legacyRemoved++;
+                } else {
+                    $skipped[$sidecar] = 'copied, but the legacy file could not be removed';
+                }
             }
 
             $moved[] = $key;
@@ -296,7 +306,7 @@ final class LocalDriver implements StorageObjectStoreInterface
             moved: $moved,
             skipped: $skipped,
             alreadyMigrated: $alreadyMigrated,
-            removedLegacy: $removeLegacy,
+            legacyRemoved: $legacyRemoved,
         );
     }
 
@@ -494,7 +504,14 @@ final class LocalDriver implements StorageObjectStoreInterface
      * object is left exactly as it was.
      *
      * writeMetadata() still checks: this says what is true now, and a
-     * concurrent writer can make it false in between.
+     * concurrent writer can make it false in between. That window is real and
+     * is not closed here — two PROCESSES writing colliding keys at the same
+     * moment can have one persist its object and still report the collision.
+     * Closing it needs a lock on the shared ancestor of the two metadata
+     * paths, which for this conflict is `.meta/` itself: a global write lock on
+     * every put, to serialise a race between two keys of a shape the check
+     * exists to refuse. The README says so rather than the driver paying for
+     * it. Raised in review of storage#20.
      */
     private function assertMetadataWritable(string $path): void
     {

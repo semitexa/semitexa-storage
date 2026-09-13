@@ -110,7 +110,7 @@ final class LocalDriverLegacyMetadataMigrationTest extends TestCase
         $report = $driver->migrateLegacyMetadata(apply: true, removeLegacy: true);
 
         self::assertSame(['a/b/original.png'], $report->moved);
-        self::assertTrue($report->removedLegacy);
+        self::assertSame(1, $report->legacyRemoved);
         self::assertFalse(is_file($this->root . '/a/b/original.png.meta.json'));
         self::assertSame('image/png', $driver->stat('a/b/original.png')?->mimeType, 'and the type survives it');
     }
@@ -130,6 +130,48 @@ final class LocalDriverLegacyMetadataMigrationTest extends TestCase
         $third = $driver->migrateLegacyMetadata(apply: true, removeLegacy: true);
         self::assertTrue($third->isEmpty() || $third->moved === [], 'and removing is still not a fresh migration');
         self::assertFalse(is_file($this->root . '/thing.png.meta.json'));
+    }
+
+    /**
+     * The report says what HAPPENED, not what was asked for. Carrying the
+     * intent meant a dry run with removal requested announced removals that had
+     * not happened. Raised in review of storage#20.
+     */
+    #[Test]
+    public function a_dry_run_reports_no_removals_however_it_was_asked(): void
+    {
+        $this->legacyObject('thing.png');
+
+        $report = (new LocalDriver($this->root))->migrateLegacyMetadata(apply: false, removeLegacy: true);
+
+        self::assertSame(0, $report->legacyRemoved);
+        self::assertTrue(is_file($this->root . '/thing.png.meta.json'));
+    }
+
+    #[Test]
+    public function a_legacy_file_that_cannot_be_removed_is_not_counted_as_removed(): void
+    {
+        $this->legacyObject('locked/thing.png');
+        $dir = $this->root . '/locked';
+        chmod($dir, 0555); // the file cannot be unlinked from a read-only directory
+
+        // Unless the suite runs as a user permissions do not apply to, in which
+        // case this would assert the opposite of what it says.
+        $probe = $dir . '/probe';
+        if (@file_put_contents($probe, 'x') !== false) {
+            @unlink($probe);
+            chmod($dir, 0755);
+            self::markTestSkipped('a read-only directory does not stop this user');
+        }
+
+        try {
+            $report = (new LocalDriver($this->root))->migrateLegacyMetadata(apply: true, removeLegacy: true);
+
+            self::assertSame(0, $report->legacyRemoved, 'nothing was deleted, so nothing may be reported as deleted');
+            self::assertArrayHasKey($dir . '/thing.png.meta.json', $report->skipped);
+        } finally {
+            chmod($dir, 0755);
+        }
     }
 
     #[Test]
