@@ -69,7 +69,7 @@ final class LocalDriverLegacyMetadataMigrationTest extends TestCase
     }
 
     #[Test]
-    public function applying_moves_the_metadata_and_keeps_the_mime_type_readable(): void
+    public function applying_copies_the_metadata_and_keeps_the_mime_type_readable(): void
     {
         $this->legacyObject('a/b/original.png', 'image/png');
         $driver = new LocalDriver($this->root);
@@ -77,9 +77,42 @@ final class LocalDriverLegacyMetadataMigrationTest extends TestCase
         $report = $driver->migrateLegacyMetadata(apply: true);
 
         self::assertSame(['a/b/original.png'], $report->moved);
-        self::assertFalse(is_file($this->root . '/a/b/original.png.meta.json'), 'the leftover must be gone');
         self::assertTrue(is_file($this->root . '/.meta/a/b/original.png.json'));
         self::assertSame('image/png', $driver->stat('a/b/original.png')?->mimeType);
+    }
+
+    /**
+     * A legacy sidecar and a caller's own object are the same kind of file, and
+     * the exact shape is not proof — a caller's `report.meta.json` holding
+     * `{"mimeType":"text/csv"}` beside a `report` object is ordinary content.
+     * So --apply copies, and nothing leaves the object namespace on the tool's
+     * own judgement. Raised in review of storage#20.
+     */
+    #[Test]
+    public function applying_alone_removes_nothing_from_the_object_namespace(): void
+    {
+        $this->legacyObject('a/b/original.png', 'image/png');
+
+        (new LocalDriver($this->root))->migrateLegacyMetadata(apply: true);
+
+        self::assertTrue(
+            is_file($this->root . '/a/b/original.png.meta.json'),
+            'the caller may own this key, and only they can say',
+        );
+    }
+
+    #[Test]
+    public function removing_the_legacy_file_is_a_second_explicit_decision(): void
+    {
+        $this->legacyObject('a/b/original.png', 'image/png');
+        $driver = new LocalDriver($this->root);
+
+        $report = $driver->migrateLegacyMetadata(apply: true, removeLegacy: true);
+
+        self::assertSame(['a/b/original.png'], $report->moved);
+        self::assertTrue($report->removedLegacy);
+        self::assertFalse(is_file($this->root . '/a/b/original.png.meta.json'));
+        self::assertSame('image/png', $driver->stat('a/b/original.png')?->mimeType, 'and the type survives it');
     }
 
     #[Test]
@@ -91,7 +124,12 @@ final class LocalDriverLegacyMetadataMigrationTest extends TestCase
         $driver->migrateLegacyMetadata(apply: true);
         $second = $driver->migrateLegacyMetadata(apply: true);
 
-        self::assertTrue($second->isEmpty(), 'a second run has nothing left to do');
+        self::assertSame([], $second->moved, 'a second run copies nothing again');
+        self::assertSame(1, $second->alreadyMigrated, 'it reports what it found rather than redoing it');
+
+        $third = $driver->migrateLegacyMetadata(apply: true, removeLegacy: true);
+        self::assertTrue($third->isEmpty() || $third->moved === [], 'and removing is still not a fresh migration');
+        self::assertFalse(is_file($this->root . '/thing.png.meta.json'));
     }
 
     #[Test]
@@ -146,7 +184,7 @@ final class LocalDriverLegacyMetadataMigrationTest extends TestCase
         // A leftover from before, alongside metadata already in the new place.
         file_put_contents($this->root . '/fresh.png.meta.json', json_encode(['mimeType' => 'image/gif']));
 
-        $report = $driver->migrateLegacyMetadata(apply: true);
+        $report = $driver->migrateLegacyMetadata(apply: true, removeLegacy: true);
 
         self::assertSame(1, $report->alreadyMigrated);
         self::assertSame('image/png', $driver->stat('fresh.png')?->mimeType, 'the current metadata wins');

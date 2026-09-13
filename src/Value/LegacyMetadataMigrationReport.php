@@ -28,6 +28,12 @@ final readonly class LegacyMetadataMigrationReport
          * same counts, and only one of them means "you are done".
          */
         public ?string $unreadableRoot = null,
+        /**
+         * Whether the legacy files were removed as well as copied. Copying is
+         * what $apply does; removing a key from the caller's namespace is a
+         * separate decision, and the report says which one was taken.
+         */
+        public bool $removedLegacy = false,
     ) {}
 
     public function movedCount(): int

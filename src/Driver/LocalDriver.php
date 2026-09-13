@@ -168,9 +168,20 @@ final class LocalDriver implements StorageObjectStoreInterface
      * Anything else is reported as skipped and left in place. An orphan whose
      * object is gone is skipped too: deleting it would be a guess.
      *
-     * Idempotent — a second run finds nothing left to move.
+     * NEITHER condition is proof, and that is why $apply COPIES. A caller's own
+     * object may hold exactly `{"mimeType":"text/csv"}` next to an object of
+     * that name — perfectly ordinary content, indistinguishable from
+     * bookkeeping by anything in the file — and moving it removed a key the
+     * caller could see. Copying gives the driver what it needs while the
+     * caller's namespace is left exactly as it was; the legacy file then only
+     * duplicates what `.meta/` now holds, and `.meta/` is what is read first.
+     *
+     * Removing it is a SECOND, explicit decision: $removeLegacy, after an
+     * operator has read the list. Raised in review of storage#20.
+     *
+     * Idempotent — a second run finds nothing left to copy.
      */
-    public function migrateLegacyMetadata(bool $apply = false): LegacyMetadataMigrationReport
+    public function migrateLegacyMetadata(bool $apply = false, bool $removeLegacy = false): LegacyMetadataMigrationReport
     {
         $root = realpath($this->basePath);
         if ($root === false) {
@@ -238,7 +249,7 @@ final class LocalDriver implements StorageObjectStoreInterface
             if (is_file($target)) {
                 if ($this->readMimeTypeFrom($target) !== null) {
                     $alreadyMigrated++;
-                    if ($apply) {
+                    if ($apply && $removeLegacy) {
                         @unlink($sidecar);
                     }
                     continue;
@@ -264,8 +275,16 @@ final class LocalDriver implements StorageObjectStoreInterface
                 continue;
             }
 
-            if (!@rename($sidecar, $target)) {
-                $skipped[$sidecar] = 'rename failed';
+            // copy(), not rename(): see the docblock. The caller's namespace
+            // is never altered by a migration, only read.
+            if (!@copy($sidecar, $target)) {
+                $skipped[$sidecar] = 'copy failed';
+                continue;
+            }
+
+            if ($removeLegacy && !@unlink($sidecar)) {
+                $skipped[$sidecar] = 'copied, but the legacy file could not be removed';
+                $moved[] = $key;
                 continue;
             }
 
@@ -277,6 +296,7 @@ final class LocalDriver implements StorageObjectStoreInterface
             moved: $moved,
             skipped: $skipped,
             alreadyMigrated: $alreadyMigrated,
+            removedLegacy: $removeLegacy,
         );
     }
 
@@ -543,11 +563,35 @@ final class LocalDriver implements StorageObjectStoreInterface
             @unlink($metadataPath);
         }
 
+        // And the directories it needed, while they are empty.
+        //
+        // Metadata for a key under `report.json/` makes .meta/report.json a
+        // DIRECTORY, which is what refuses a later put('report'). Left behind
+        // after its last child was deleted, that refusal outlived the conflict
+        // that justified it: the key stayed unwritable for good, with nothing
+        // on disk to explain why. Raised in review of storage#20.
+        $this->pruneEmptyMetadataDirs(dirname($metadataPath));
+
         // A legacy `<key>.meta.json` is deliberately left alone. After this
         // change it is an ordinary object in the caller's namespace, and
         // deleting it here would be the very bug this layout removes — one
         // object's delete reaching into another's. Leftovers from the old
         // layout stay visible until an operator clears them.
+    }
+
+    /**
+     * Remove $dir and its parents while they are empty, stopping at `.meta/`.
+     *
+     * @rmdir only succeeds on an empty directory, so this cannot take anything
+     * with it; the loop just stops at the first one that still holds something.
+     */
+    private function pruneEmptyMetadataDirs(string $dir): void
+    {
+        $root = $this->basePath . '/' . self::METADATA_DIR;
+
+        while ($dir !== $root && str_starts_with($dir, $root . '/') && @rmdir($dir)) {
+            $dir = dirname($dir);
+        }
     }
 
     private function readStoredMimeType(string $path): ?string

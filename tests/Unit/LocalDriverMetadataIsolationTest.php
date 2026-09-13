@@ -253,6 +253,41 @@ final class LocalDriverMetadataIsolationTest extends TestCase
         self::assertSame('text/csv', $driver->stat('report-archive/child')?->mimeType);
     }
 
+    /**
+     * The refusal must not outlive the conflict.
+     *
+     * Metadata for a key under `report.json/` makes .meta/report.json a
+     * directory, which is what refuses a later put('report'). Left behind after
+     * its last child was deleted, that refusal made an ordinary key unwritable
+     * for good, with nothing on disk to explain why. Raised in review of
+     * storage#20.
+     */
+    #[Test]
+    public function deleting_the_nested_key_frees_the_name_it_was_blocking(): void
+    {
+        $driver = new LocalDriver($this->base);
+        $driver->put('report.json/child', 'body', 'text/csv');
+        $driver->delete('report.json/child');
+
+        $driver->put('report', 'body', 'application/x-custom');
+
+        self::assertSame('body', $driver->get('report'));
+        self::assertSame('application/x-custom', $driver->stat('report')?->mimeType);
+    }
+
+    /** Only while empty: a sibling still carrying metadata keeps the directory. */
+    #[Test]
+    public function a_remaining_sibling_keeps_the_collision_in_force(): void
+    {
+        $driver = new LocalDriver($this->base);
+        $driver->put('report.json/one', 'body', 'text/csv');
+        $driver->put('report.json/two', 'body', 'text/csv');
+        $driver->delete('report.json/one');
+
+        $this->expectException(StorageException::class);
+        $driver->put('report', 'body', 'text/plain');
+    }
+
     /** The same collision reached from the other side: the nested key first. */
     #[Test]
     public function the_collision_is_named_in_either_insertion_order(): void

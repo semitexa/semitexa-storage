@@ -26,6 +26,11 @@ final class StorageMigrateMetadataCommand extends Command
                 description: 'Actually move the files. Without it nothing is touched and the plan is printed.',
             )
             ->addOption(
+                name: 'remove-legacy',
+                mode: InputOption::VALUE_NONE,
+                description: 'Also delete each legacy file after copying it. Without this nothing leaves the object namespace.',
+            )
+            ->addOption(
                 name: 'path',
                 mode: InputOption::VALUE_REQUIRED,
                 description: 'Storage root to migrate. Defaults to the configured local storage root.',
@@ -35,6 +40,7 @@ final class StorageMigrateMetadataCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $apply = (bool) $input->getOption('apply');
+        $removeLegacy = (bool) $input->getOption('remove-legacy');
         /** @var string|null $path */
         $path = $input->getOption('path');
 
@@ -54,7 +60,7 @@ final class StorageMigrateMetadataCommand extends Command
         }
 
         $driver = new LocalDriver($path);
-        $report = $driver->migrateLegacyMetadata($apply);
+        $report = $driver->migrateLegacyMetadata($apply, $removeLegacy);
 
         if ($report->unreadableRoot !== null) {
             // Not the same as finding nothing. Reporting success here told an
@@ -73,7 +79,11 @@ final class StorageMigrateMetadataCommand extends Command
         }
 
         foreach ($report->moved as $key) {
-            $output->writeln(sprintf('  %s %s', $apply ? 'moved' : 'would move', $key));
+            $output->writeln(sprintf(
+                '  %s %s',
+                $apply ? ($removeLegacy ? 'moved' : 'copied') : ($removeLegacy ? 'would move' : 'would copy'),
+                $key,
+            ));
         }
 
         foreach ($report->skipped as $file => $why) {
@@ -84,21 +94,34 @@ final class StorageMigrateMetadataCommand extends Command
             // Said the same way in both modes: a dry run that does not mention
             // the removal is not a plan of what --apply does.
             $output->writeln(sprintf(
-                '  %d already had metadata in the reserved subtree; %s the leftover beside the object.',
+                '  %d already had metadata in the reserved subtree; %s',
                 $report->alreadyMigrated,
-                $apply ? 'removed' : 'would remove',
+                $removeLegacy
+                    ? ($apply ? 'removed the leftover beside the object.' : 'would remove the leftover beside the object.')
+                    : 'the leftover beside the object is left in place.',
             ));
         }
 
         $output->writeln(sprintf(
             '<info>%s %d, left alone %d.</info>',
-            $apply ? 'Moved' : 'Would move',
+            $apply ? ($removeLegacy ? 'Moved' : 'Copied') : ($removeLegacy ? 'Would move' : 'Would copy'),
             $report->movedCount(),
             $report->skippedCount(),
         ));
 
         if (!$apply) {
             $output->writeln('Nothing was changed. Re-run with --apply to do it.');
+        } elseif (!$removeLegacy) {
+            // Said plainly, because a copy that leaves both files looks like a
+            // half-finished job unless the operator is told it is the point: a
+            // legacy file and a caller's own object are the same kind of file,
+            // so nothing leaves the object namespace on the tool's own
+            // judgement. Once the list above has been read, --remove-legacy
+            // does that half.
+            $output->writeln(
+                'The legacy files were left where they are; .meta/ is read first, so nothing depends on them now. '
+                . 'Re-run with --apply --remove-legacy to delete them once you have read the list.',
+            );
         }
 
         return Command::SUCCESS;
