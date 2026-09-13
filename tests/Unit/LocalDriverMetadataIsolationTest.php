@@ -183,4 +183,36 @@ final class LocalDriverMetadataIsolationTest extends TestCase
         self::assertNotSame('text/csv', $driver->stat('doc')?->mimeType,
             'only the exact shape the driver used to write may be read back as metadata');
     }
+
+    /**
+     * Metadata for key `report` is a FILE at .meta/report.json, and metadata
+     * for a key under `report.json/` needs that same path to be a DIRECTORY.
+     * One of the two always loses — and losing quietly dropped the caller's
+     * MIME type with nothing said, which is the silent-overwrite shape this
+     * layout exists to remove. So it is named.
+     */
+    #[Test]
+    public function two_keys_whose_metadata_paths_collide_are_told_so(): void
+    {
+        $driver = new LocalDriver($this->base);
+        $driver->put('report', 'body', 'text/plain');
+
+        try {
+            $driver->put('report.json/child', 'body', 'text/csv');
+            self::fail('the second key silently lost its metadata');
+        } catch (StorageException $e) {
+            self::assertStringContainsString('cannot both carry metadata', $e->getMessage());
+        }
+    }
+
+    #[Test]
+    public function an_ordinary_nested_pair_is_unaffected(): void
+    {
+        $driver = new LocalDriver($this->base);
+        $driver->put('report', 'body', 'text/plain');
+        $driver->put('report-archive/child', 'body', 'text/csv');
+
+        self::assertSame('text/plain', $driver->stat('report')?->mimeType);
+        self::assertSame('text/csv', $driver->stat('report-archive/child')?->mimeType);
+    }
 }

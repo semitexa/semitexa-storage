@@ -165,7 +165,13 @@ final class LocalDriver implements StorageObjectStoreInterface
     {
         $root = realpath($this->basePath);
         if ($root === false) {
-            return new LegacyMetadataMigrationReport(applied: $apply, moved: [], skipped: [], alreadyMigrated: 0);
+            return new LegacyMetadataMigrationReport(
+                applied: $apply,
+                moved: [],
+                skipped: [],
+                alreadyMigrated: 0,
+                unreadableRoot: $this->basePath,
+            );
         }
 
         $moved = [];
@@ -192,7 +198,17 @@ final class LocalDriver implements StorageObjectStoreInterface
                 continue;
             }
 
-            $target = $this->basePath . '/' . self::METADATA_DIR . '/' . $key . '.json';
+            // Through confine(), exactly as an ordinary metadata write goes.
+            // Built by hand, a symlink planted at .meta/ or below redirects an
+            // operator-run --apply into any writable directory, because rename()
+            // follows it.
+            try {
+                $target = $this->metadataPath($key);
+            } catch (StorageException $e) {
+                $skipped[$sidecar] = 'metadata destination refused: ' . $e->getMessage();
+                continue;
+            }
+
             if (is_file($target)) {
                 $alreadyMigrated++;
                 if ($apply) {
@@ -417,10 +433,40 @@ final class LocalDriver implements StorageObjectStoreInterface
         $metadataPath = $this->metadataPath($path);
         $dir = dirname($metadataPath);
         if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+            // Two shapes of failure, and only one of them is a hiccup.
+            //
+            // Metadata for key `report` is a FILE at .meta/report.json, and
+            // metadata for a key under `report.json/` needs that same path to
+            // be a DIRECTORY. One of the two always loses, and losing quietly
+            // means stat() drops the caller's MIME type with nothing said —
+            // the silent-overwrite shape this whole layout exists to remove.
+            // So a structural conflict is named, while a full disk or a
+            // read-only mount stays best-effort as the docblock promises.
+            if (self::hasFileAncestor($dir)) {
+                throw StorageException::writeFailed(
+                    $path,
+                    'metadata for another key occupies ' . $dir . '; these two keys cannot both carry metadata',
+                );
+            }
+
             return;
         }
         $data = json_encode(['mimeType' => $mimeType], JSON_THROW_ON_ERROR);
         @file_put_contents($metadataPath, $data);
+    }
+
+    /** Is some ancestor of $dir an existing file, rather than a directory? */
+    private static function hasFileAncestor(string $dir): bool
+    {
+        $probe = $dir;
+        while ($probe !== '' && $probe !== '/' && $probe !== dirname($probe)) {
+            if (is_file($probe)) {
+                return true;
+            }
+            $probe = dirname($probe);
+        }
+
+        return false;
     }
 
     private function deleteMetadata(string $path): void

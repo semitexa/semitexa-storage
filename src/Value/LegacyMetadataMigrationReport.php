@@ -22,6 +22,12 @@ final readonly class LegacyMetadataMigrationReport
         public array $moved,
         public array $skipped,
         public int $alreadyMigrated,
+        /**
+         * Why nothing could be looked at, when that is the reason the report is
+         * empty. An empty root and a root that does not resolve produce the
+         * same counts, and only one of them means "you are done".
+         */
+        public ?string $unreadableRoot = null,
     ) {}
 
     public function movedCount(): int

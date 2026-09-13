@@ -86,6 +86,9 @@ class S3Driver implements StorageObjectStoreInterface
      * lenient reading of 403 back. It is opt-in rather than the default because
      * the alternative is silence about real failures; the exception message
      * names the flag so nobody has to find this comment first.
+     *
+     * That escape applies to GET and HEAD alone. DeleteObject answers 204 for a
+     * key that was never there, so nothing about a DELETE 403 is ambiguous.
      */
     private function isPresent(int $status, string $method, string $path): bool
     {
@@ -97,7 +100,14 @@ class S3Driver implements StorageObjectStoreInterface
             return false;
         }
 
-        if ($status === HttpStatus::Forbidden->value && self::forbiddenMeansMissing()) {
+        // READS only. DeleteObject answers 204 for a key that is not there, so
+        // a 403 on DELETE is a genuine authorization failure and never the
+        // ListBucket ambiguity — routing it through this branch would hide a
+        // revoked delete permission as an ordinary absent object.
+        if ($status === HttpStatus::Forbidden->value
+            && in_array($method, ['GET', 'HEAD'], true)
+            && self::forbiddenMeansMissing()
+        ) {
             return false;
         }
 

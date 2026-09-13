@@ -56,6 +56,17 @@ final class StorageMigrateMetadataCommand extends Command
         $driver = new LocalDriver($path);
         $report = $driver->migrateLegacyMetadata($apply);
 
+        if ($report->unreadableRoot !== null) {
+            // Not the same as finding nothing. Reporting success here told an
+            // operator their storage was clean when it had not been read at all.
+            $output->writeln(sprintf(
+                '<error>Storage root does not exist or cannot be resolved: %s</error>',
+                $report->unreadableRoot,
+            ));
+
+            return Command::FAILURE;
+        }
+
         if ($report->isEmpty()) {
             $output->writeln('<info>Nothing to migrate: no legacy metadata found.</info>');
             return Command::SUCCESS;

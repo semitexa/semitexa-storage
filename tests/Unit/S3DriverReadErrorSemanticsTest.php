@@ -20,6 +20,28 @@ use Semitexa\Storage\Exception\StorageException;
  */
 final class S3DriverReadErrorSemanticsTest extends TestCase
 {
+    private string|false $originalFlag = false;
+
+    /**
+     * The flag is read from the process environment, so a shell that happens to
+     * export it would silently invert every strict assertion below. Forced
+     * empty rather than unset, so a .env fallback cannot put it back.
+     */
+    protected function setUp(): void
+    {
+        $this->originalFlag = getenv('STORAGE_S3_MISSING_IS_FORBIDDEN');
+        putenv('STORAGE_S3_MISSING_IS_FORBIDDEN=');
+    }
+
+    protected function tearDown(): void
+    {
+        if ($this->originalFlag === false) {
+            putenv('STORAGE_S3_MISSING_IS_FORBIDDEN');
+        } else {
+            putenv('STORAGE_S3_MISSING_IS_FORBIDDEN=' . $this->originalFlag);
+        }
+    }
+
     /** @return list<array{int}> */
     public static function failureStatuses(): array
     {
@@ -164,13 +186,10 @@ final class S3DriverReadErrorSemanticsTest extends TestCase
         $driver = new FakeReadS3Driver(status: 403);
 
         putenv('STORAGE_S3_MISSING_IS_FORBIDDEN=1');
-        try {
-            self::assertNull($driver->get('uploads/report.pdf'));
-            self::assertFalse($driver->exists('uploads/report.pdf'));
-            self::assertNull($driver->stat('uploads/report.pdf'));
-        } finally {
-            putenv('STORAGE_S3_MISSING_IS_FORBIDDEN');
-        }
+
+        self::assertNull($driver->get('uploads/report.pdf'));
+        self::assertFalse($driver->exists('uploads/report.pdf'));
+        self::assertNull($driver->stat('uploads/report.pdf'));
     }
 
     #[Test]
@@ -187,16 +206,27 @@ final class S3DriverReadErrorSemanticsTest extends TestCase
         }
     }
 
+    /**
+     * DeleteObject answers 204 for a key that was never there, so a 403 on
+     * DELETE is a revoked permission and nothing else. Reading it as absence
+     * would report a completed delete that never happened.
+     */
+    #[Test]
+    public function the_opt_out_does_not_reach_delete(): void
+    {
+        putenv('STORAGE_S3_MISSING_IS_FORBIDDEN=1');
+
+        $this->expectException(StorageException::class);
+        (new FakeReadS3Driver(status: 403))->delete('uploads/report.pdf');
+    }
+
     #[Test]
     public function the_opt_out_does_not_excuse_any_other_status(): void
     {
         putenv('STORAGE_S3_MISSING_IS_FORBIDDEN=1');
-        try {
-            $this->expectException(StorageException::class);
-            (new FakeReadS3Driver(status: 500))->get('uploads/report.pdf');
-        } finally {
-            putenv('STORAGE_S3_MISSING_IS_FORBIDDEN');
-        }
+
+        $this->expectException(StorageException::class);
+        (new FakeReadS3Driver(status: 500))->get('uploads/report.pdf');
     }
 }
 /**

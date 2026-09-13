@@ -206,4 +206,41 @@ final class LocalDriverLegacyMetadataMigrationTest extends TestCase
         self::assertFalse($report->applied);
         self::assertTrue(is_file($this->root . '/thing.png.meta.json'), 'a dry run removes nothing');
     }
+
+    /**
+     * The migration built its destination by hand and renamed to it. A symlink
+     * planted at .meta/ or below therefore redirected an operator-run --apply
+     * into any writable directory, because rename() follows it — while an
+     * ordinary metadata write went through the same confinement that stops it.
+     */
+    #[Test]
+    public function the_migration_will_not_rename_through_a_planted_symlink(): void
+    {
+        $outside = $this->root . '-outside';
+        mkdir($outside, 0777, true);
+        $this->legacyObject('report.png');
+        mkdir($this->root . '/.meta', 0777, true);
+        // Everything under .meta/ now resolves outside the root.
+        rmdir($this->root . '/.meta');
+        symlink($outside, $this->root . '/.meta');
+
+        try {
+            $report = (new LocalDriver($this->root))->migrateLegacyMetadata(apply: true);
+
+            self::assertSame([], $report->moved, 'nothing may be migrated through the link');
+            self::assertSame([], glob($outside . '/*') ?: [], 'and nothing may land outside the root');
+        } finally {
+            @unlink($this->root . '/.meta');
+            $this->removeTree($outside);
+        }
+    }
+
+    #[Test]
+    public function a_root_that_cannot_be_resolved_is_not_an_empty_one(): void
+    {
+        $report = (new LocalDriver($this->root . '/does-not-exist'))->migrateLegacyMetadata();
+
+        self::assertTrue($report->isEmpty());
+        self::assertNotNull($report->unreadableRoot, 'an empty report needs to say whether anything was read');
+    }
 }
