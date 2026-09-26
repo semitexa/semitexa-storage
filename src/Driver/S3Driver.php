@@ -131,7 +131,34 @@ class S3Driver implements StorageObjectStoreInterface
 
     public function url(string $path): string
     {
-        return rtrim($this->endpoint, '/') . '/' . $this->bucket . '/' . ltrim($path, '/');
+        return rtrim($this->endpoint, '/') . '/' . $this->bucket . self::encodeObjectPath($path);
+    }
+
+    /**
+     * Percent-encode an object key for use as a URL path / SigV4 canonical URI.
+     *
+     * AWS SigV4 requires each path SEGMENT to be URI-encoded per RFC 3986
+     * (unreserved chars A-Za-z0-9-_.~ left alone, everything else escaped),
+     * while the '/' segment separators themselves stay literal. rawurlencode()
+     * matches that RFC 3986 unreserved set exactly, so it is applied per
+     * segment rather than to the whole path (which would also escape '/').
+     *
+     * Without this, a key containing a space or non-ASCII character produced
+     * an unescaped URL that curl rejected ("Malformed input") and a public
+     * url() link that browsers/clients could not fetch. S3 does NOT
+     * double-encode the path for the canonical request (that only applies to
+     * the canonical query string), so this single encoding is reused as-is
+     * for the request URL, the SigV4 canonical URI, and url() — keeping the
+     * signature and the actual request path in agreement.
+     */
+    private static function encodeObjectPath(string $path): string
+    {
+        $normalized = '/' . ltrim($path, '/');
+
+        return implode('/', array_map(
+            static fn (string $segment): string => rawurlencode($segment),
+            explode('/', $normalized),
+        ));
     }
 
     public function stat(string $path): ?StoredObjectMetadata
@@ -210,7 +237,10 @@ class S3Driver implements StorageObjectStoreInterface
      */
     protected function requestWithHeaders(string $method, string $path, string $body = '', array $extraHeaders = []): array
     {
-        $path = '/' . ltrim($path, '/');
+        // Encoded once and reused for the request URL below AND the canonical
+        // request's URI (see encodeObjectPath()) so the signature matches what
+        // is actually sent.
+        $path = self::encodeObjectPath($path);
         $host = parse_url($this->endpoint, PHP_URL_HOST);
         $scheme = parse_url($this->endpoint, PHP_URL_SCHEME) ?: 'https';
         $port = parse_url($this->endpoint, PHP_URL_PORT);
