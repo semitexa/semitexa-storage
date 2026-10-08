@@ -2,13 +2,17 @@
 
 Driver-based file storage abstraction with local and S3/MinIO backends.
 
+## Install
+
+Included in every project created by the installer (https://semitexa.com/install.sh).
+
 ## Purpose
 
 Provides a unified file storage API across local filesystem and S3-compatible object stores. Handles path namespacing for tenant isolation, metadata tracking via ORM, and CDN-ready URL generation.
 
 ## Role in Semitexa
 
-Depends on `semitexa/core` and `semitexa/orm`. Used by `semitexa/mail` for attachments and `semitexa/platform-user` for avatar storage. Drivers are resolved via the container and selected per storage context.
+Depends on `semitexa/core` and `semitexa/orm`. Used by `semitexa/mail` for attachments and `semitexa/media` for asset files. The driver is selected with `STORAGE_DRIVER` (`local` by default, or `s3`). Drivers are resolved via the container and selected per storage context.
 
 ## Key Features
 
@@ -19,6 +23,7 @@ Depends on `semitexa/core` and `semitexa/orm`. Used by `semitexa/mail` for attac
 - `StoredObjectDescriptor` and `StoredObjectMetadata` value objects
 - Tenant-aware path namespacing
 - `StorageObjectStoreInterface` for metadata persistence
+- Console: `storage:migrate-metadata`
 
 ## Notes
 
