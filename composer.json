@@ -23,6 +23,11 @@
         "semitexa-module": {
             "name": "storage",
             "description": "File storage abstraction: local filesystem, S3/MinIO"
+        },
+        "semitexa": {
+            "floors": {
+                "semitexa/core": "next"
+            }
         }
     },
     "keywords": [

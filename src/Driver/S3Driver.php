@@ -10,6 +10,12 @@ use Semitexa\Storage\Contract\StorageObjectStoreInterface;
 use Semitexa\Storage\Exception\StorageException;
 use Semitexa\Storage\Value\StoredObjectDescriptor;
 use Semitexa\Storage\Value\StoredObjectMetadata;
+use Semitexa\Core\Http\Client\CurlHttpClient;
+use Semitexa\Core\Http\Client\HttpCallOptions;
+use Semitexa\Core\Http\Client\HttpClientInterface;
+use Semitexa\Core\Http\Client\HttpRequest;
+use Semitexa\Core\Http\Client\RetryPolicy;
+use Semitexa\Core\Http\Exception\HttpTransportException;
 
 class S3Driver implements StorageObjectStoreInterface
 {
@@ -18,6 +24,7 @@ class S3Driver implements StorageObjectStoreInterface
     private readonly string $endpoint;
     private readonly string $key;
     private readonly string $secret;
+    private readonly HttpClientInterface $http;
 
     public function __construct(
         ?string $bucket = null,
@@ -25,7 +32,9 @@ class S3Driver implements StorageObjectStoreInterface
         ?string $endpoint = null,
         ?string $key = null,
         ?string $secret = null,
+        ?HttpClientInterface $http = null,
     ) {
+        $this->http = $http ?? new CurlHttpClient();
         $this->bucket = $bucket ?? Environment::getEnvValue('STORAGE_S3_BUCKET', '');
         $this->region = $region ?? Environment::getEnvValue('STORAGE_S3_REGION', 'us-east-1');
         $this->endpoint = $endpoint ?? Environment::getEnvValue('STORAGE_S3_ENDPOINT', "https://s3.{$this->region}.amazonaws.com");
@@ -339,35 +348,27 @@ class S3Driver implements StorageObjectStoreInterface
      */
     protected function executeHttp(string $url, string $method, array $curlHeaders, string $body, array &$responseHeaders): array
     {
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-
-        curl_setopt($ch, CURLOPT_HEADERFUNCTION, static function ($ch, string $header) use (&$responseHeaders): int {
-            $length = strlen($header);
-            $parts = explode(':', $header, 2);
-            if (count($parts) === 2) {
-                $responseHeaders[strtolower(trim($parts[0]))] = trim($parts[1]);
-            }
-            return $length;
-        });
-
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $curlHeaders);
-
-        if ($body !== '') {
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        $headers = [];
+        foreach ($curlHeaders as $line) {
+            [$name, $value] = array_map('trim', explode(':', $line, 2)) + [1 => ''];
+            $headers[$name] = [$value];
         }
 
-        $responseBody = curl_exec($ch);
-        $result = [
-            'body' => $responseBody,
-            'errno' => curl_errno($ch),
-            'error' => curl_error($ch),
-            'status' => (int) curl_getinfo($ch, CURLINFO_HTTP_CODE),
-        ];
-        curl_close($ch);
+        try {
+            // A signed request stays valid for 15 minutes, so resending one is
+            // safe; a repeated PUT writes the same object again.
+            $response = $this->http->send(
+                new HttpRequest($method, $url, $headers, $body),
+                new HttpCallOptions(timeout: 30.0, retry: RetryPolicy::idempotent(2)),
+            );
+        } catch (HttpTransportException $e) {
+            return ['body' => false, 'errno' => -1, 'error' => $e->detail, 'status' => 0];
+        }
 
-        return $result;
+        foreach ($response->headers as $name => $values) {
+            $responseHeaders[$name] = $values[count($values) - 1];
+        }
+
+        return ['body' => $response->body, 'errno' => 0, 'error' => '', 'status' => $response->status];
     }
 }

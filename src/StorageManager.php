@@ -12,11 +12,16 @@ use Semitexa\Storage\Driver\LocalDriver;
 use Semitexa\Storage\Driver\S3Driver;
 use Semitexa\Storage\Value\StoredObjectDescriptor;
 use Semitexa\Storage\Value\StoredObjectMetadata;
+use Semitexa\Core\Attribute\InjectAsReadonly;
+use Semitexa\Core\Http\Client\HttpClientInterface;
 
 #[SatisfiesServiceContract(of: StorageDriverInterface::class)]
 #[SatisfiesServiceContract(of: StorageObjectStoreInterface::class)]
 final class StorageManager implements StorageObjectStoreInterface
 {
+    #[InjectAsReadonly]
+    protected HttpClientInterface $http;
+
     private ?StorageObjectStoreInterface $driver = null;
 
     public function put(string $path, string $contents, string $mimeType): void
@@ -71,7 +76,7 @@ final class StorageManager implements StorageObjectStoreInterface
         $driverName = Environment::getEnvValue('STORAGE_DRIVER', 'local');
 
         $this->driver = match ($driverName) {
-            's3' => new S3Driver(),
+            's3' => new S3Driver(http: isset($this->http) ? $this->http : null),
             default => new LocalDriver(),
         };
 
