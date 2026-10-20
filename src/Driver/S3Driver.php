@@ -355,12 +355,24 @@ class S3Driver implements StorageObjectStoreInterface
         }
 
         try {
+            $request = new HttpRequest($method, $url, $headers, $body);
+        } catch (\InvalidArgumentException $e) {
+            // A header value with a line break (a client-supplied MIME type):
+            // a storage failure for the caller, not an InvalidArgumentException.
+            return ['body' => false, 'errno' => -1, 'error' => $e->getMessage(), 'status' => 0];
+        }
+
+        try {
             // A signed request stays valid for 15 minutes, so resending one is
-            // safe; a repeated PUT writes the same object again.
-            $response = $this->http->send(
-                new HttpRequest($method, $url, $headers, $body),
-                new HttpCallOptions(timeout: 30.0, retry: RetryPolicy::idempotent(2)),
-            );
+            // safe; a repeated PUT writes the same object again. An object comes
+            // back as stored: no size cap (the driver never had one) and no
+            // inflating of an object kept with its own Content-Encoding.
+            $response = $this->http->send($request, new HttpCallOptions(
+                timeout: 30.0,
+                maxResponseBytes: PHP_INT_MAX,
+                decodeContent: false,
+                retry: RetryPolicy::idempotent(2),
+            ));
         } catch (HttpTransportException $e) {
             return ['body' => false, 'errno' => -1, 'error' => $e->detail, 'status' => 0];
         }

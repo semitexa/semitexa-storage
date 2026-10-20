@@ -34,7 +34,24 @@ final class S3DriverHttpClientTest extends TestCase
             && $r->body === 'hello'
             && str_starts_with((string) $r->header('Authorization'), 'AWS4-HMAC-SHA256 Credential=key/')
             && $r->header('x-amz-content-sha256') === hash('sha256', 'hello'));
-        self::assertSame(2, $http->recordedOptions()[0]->retry->maxAttempts);
+        $options = $http->recordedOptions()[0];
+        self::assertSame(2, $options->retry->maxAttempts);
+        self::assertSame(PHP_INT_MAX, $options->maxResponseBytes, 'an object of any size comes back, as before');
+        self::assertFalse($options->decodeContent, 'an object kept gzip-encoded comes back as stored');
+    }
+
+    #[Test]
+    public function a_mime_type_with_a_line_break_is_a_storage_failure(): void
+    {
+        $http = new FakeHttpClient();
+
+        $this->expectException(StorageException::class);
+
+        try {
+            self::driver($http)->put('a.txt', 'x', "text/plain\r\nX-Injected: 1");
+        } finally {
+            $http->assertSentCount(0);
+        }
     }
 
     #[Test]
