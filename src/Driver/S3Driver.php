@@ -65,11 +65,18 @@ class S3Driver implements StorageObjectStoreInterface
 
     public function delete(string $path): bool
     {
+        // S3 answers 204 whether or not the object was there, so the DELETE
+        // alone cannot say whether this call removed something; it reported
+        // true for a missing key where LocalDriver says false. Asked first, so
+        // the answer means one thing across drivers (two calls race as any
+        // check-then-act does; the object is gone either way).
+        // Only a definite 404 skips the DELETE: a 403 read as missing under
+        // STORAGE_S3_MISSING_IS_FORBIDDEN may hide an object that is there.
+        if ($this->request('HEAD', $path)['status'] === HttpStatus::NotFound->value) {
+            return false;
+        }
         $response = $this->request('DELETE', $path);
-        // S3 answers 204 whether or not the object was there, so a 2xx is a
-        // completed delete. A 404 returns false — the same answer LocalDriver
-        // gives for an object that was not there to delete, so "did this call
-        // remove something" means one thing across drivers.
+
         return $this->isPresent($response['status'], 'DELETE', $path);
     }
 

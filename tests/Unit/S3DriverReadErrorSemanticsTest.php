@@ -146,13 +146,19 @@ final class S3DriverReadErrorSemanticsTest extends TestCase
         self::assertTrue($driver->exists('empty'));
     }
 
+    // verify:accept-test-change tk-storage-guide-findings: S3 delete() asks first, so a missing key reports false like LocalDriver
     #[Test]
-    public function a_delete_of_an_already_absent_object_is_not_an_error(): void
+    public function a_delete_says_whether_it_removed_something_as_the_local_driver_does(): void
     {
-        // S3 answers 204 to DELETE whether or not the object was there.
-        $driver = new FakeReadS3Driver(status: 204);
+        // S3 answers 204 to DELETE whether or not the object was there, so
+        // delete() said true for a key that never existed.
+        $absent = new MethodStatusS3Driver(['HEAD' => 404, 'DELETE' => 204]);
+        self::assertFalse($absent->delete('never-there'));
+        self::assertSame(['HEAD'], $absent->methods, 'nothing to delete, nothing sent');
 
-        self::assertTrue($driver->delete('whatever'));
+        $present = new MethodStatusS3Driver(['HEAD' => 200, 'DELETE' => 204]);
+        self::assertTrue($present->delete('there'));
+        self::assertSame(['HEAD', 'DELETE'], $present->methods);
     }
 
     #[Test]
@@ -251,5 +257,25 @@ final class FakeReadS3Driver extends S3Driver
             'error' => '',
             'status' => $this->status,
         ];
+    }
+}
+
+final class MethodStatusS3Driver extends S3Driver
+{
+    /** @var list<string> */
+    public array $methods = [];
+
+    /** @param array<string, int> $statusByMethod */
+    public function __construct(private readonly array $statusByMethod)
+    {
+        parent::__construct(bucket: 'test-bucket', region: 'us-east-1', endpoint: 'https://s3.example.invalid', key: 'k', secret: 's');
+    }
+
+    protected function executeHttp(string $url, string $method, array $curlHeaders, string $body, array &$responseHeaders): array
+    {
+        $this->methods[] = $method;
+        $responseHeaders = [];
+
+        return ['body' => '', 'errno' => 0, 'error' => '', 'status' => $this->statusByMethod[$method] ?? 500];
     }
 }
