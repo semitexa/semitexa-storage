@@ -70,4 +70,23 @@ final class StorageReviewFixesTest extends TestCase
         self::assertSame('pass', StorageDriverDoctorCheck::verdict('s3')->status->value);
         self::assertSame('pass', StorageDriverDoctorCheck::verdict('local')->status->value);
     }
+
+    #[Test]
+    public function the_local_root_is_the_project_not_the_working_directory(): void
+    {
+        $previousRoot = getenv('PROJECT_ROOT');
+        $previousCwd = (string) getcwd();
+        putenv('PROJECT_ROOT');
+        chdir($this->base);
+        try {
+            $driver = new LocalDriver();
+            $root = (new \ReflectionProperty(LocalDriver::class, 'basePath'))->getValue($driver);
+        } finally {
+            chdir($previousCwd);
+            $previousRoot === false ? putenv('PROJECT_ROOT') : putenv('PROJECT_ROOT=' . $previousRoot);
+        }
+
+        self::assertStringStartsWith(\Semitexa\Core\Support\ProjectRoot::get(), (string) $root);
+        self::assertStringNotContainsString($this->base, (string) $root, 'a script run from another directory wrote there');
+    }
 }

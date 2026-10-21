@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Storage\Driver;
 
 use Semitexa\Core\Environment;
+use Semitexa\Core\Support\ProjectRoot;
 use Semitexa\Storage\Contract\StorageObjectStoreInterface;
 use Semitexa\Storage\Exception\StorageException;
 use Semitexa\Storage\Value\LegacyMetadataMigrationReport;
@@ -668,9 +669,16 @@ final class LocalDriver implements StorageObjectStoreInterface
         return $detected !== false ? $detected : 'application/octet-stream';
     }
 
+    /**
+     * PROJECT_ROOT when set, otherwise the project the code runs in. The
+     * working directory used to stand in, so a script started from another
+     * directory wrote to a var/uploads of its own.
+     */
     private function resolveDefaultBasePath(): string
     {
-        $projectRoot = Environment::getEnvValue('PROJECT_ROOT', getcwd());
+        $configured = Environment::getEnvValue('PROJECT_ROOT');
+        $projectRoot = is_string($configured) && $configured !== '' ? rtrim($configured, '/') : ProjectRoot::get();
+
         return $projectRoot . '/var/uploads';
     }
 }
