@@ -258,6 +258,17 @@ final class FakeReadS3Driver extends S3Driver
             'status' => $this->status,
         ];
     }
+
+    protected function executeHttpInto(string $url, string $method, array $curlHeaders, $sink, array &$responseHeaders): array
+    {
+        $result = $this->executeHttp($url, $method, $curlHeaders, '', $responseHeaders);
+        if ($this->status >= 200 && $this->status < 300) {
+            fwrite($sink, $this->body);
+            $result['body'] = '';
+        }
+
+        return $result;
+    }
 }
 
 final class MethodStatusS3Driver extends S3Driver

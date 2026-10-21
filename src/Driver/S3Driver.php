@@ -24,6 +24,7 @@ class S3Driver implements StorageObjectStoreInterface
     private readonly string $endpoint;
     private readonly string $key;
     private readonly string $secret;
+    private readonly bool $pathStyle;
     private readonly HttpClientInterface $http;
 
     public function __construct(
@@ -33,6 +34,7 @@ class S3Driver implements StorageObjectStoreInterface
         ?string $key = null,
         ?string $secret = null,
         ?HttpClientInterface $http = null,
+        ?bool $pathStyle = null,
     ) {
         $this->http = $http ?? new CurlHttpClient();
         $this->bucket = $bucket ?? Environment::getEnvValue('STORAGE_S3_BUCKET', '');
@@ -40,6 +42,26 @@ class S3Driver implements StorageObjectStoreInterface
         $this->endpoint = $endpoint ?? Environment::getEnvValue('STORAGE_S3_ENDPOINT', "https://s3.{$this->region}.amazonaws.com");
         $this->key = $key ?? Environment::getEnvValue('STORAGE_S3_KEY', '');
         $this->secret = $secret ?? Environment::getEnvValue('STORAGE_S3_SECRET', '');
+        $this->pathStyle = $pathStyle ?? self::pathStyleFor($this->endpoint);
+    }
+
+    /**
+     * The bucket in the path (`host/bucket/key`) rather than the host name
+     * (`bucket.host/key`). STORAGE_S3_PATH_STYLE=1 or 0 decides; unset, an
+     * endpoint whose host cannot carry a bucket name in front of it — an IP
+     * address, `localhost`, a one-word name such as a compose service — is
+     * path style: a self-hosted store there has no bucket DNS, and every
+     * request failed to resolve `bucket.minio`.
+     */
+    private static function pathStyleFor(string $endpoint): bool
+    {
+        $flag = strtolower(trim((string) Environment::getEnvValue('STORAGE_S3_PATH_STYLE', '')));
+        if ($flag !== '') {
+            return in_array($flag, ['1', 'true', 'yes', 'on'], true);
+        }
+        $host = trim((string) parse_url($endpoint, PHP_URL_HOST), '[]');
+
+        return $host === 'localhost' || !str_contains($host, '.') || filter_var($host, FILTER_VALIDATE_IP) !== false;
     }
 
     public function put(string $path, string $contents, string $mimeType): void
@@ -205,18 +227,32 @@ class S3Driver implements StorageObjectStoreInterface
      */
     public function readStream(string $path)
     {
-        $response = $this->request('GET', $path);
-        if (!$this->isPresent($response['status'], 'GET', $path)) {
-            return null;
-        }
-
+        // Written as it arrives into a temp stream, which spills to disk past
+        // 2 MiB: an object used to be read whole into a string first.
         $stream = fopen('php://temp', 'r+b');
         if ($stream === false) {
-            return null;
+            throw StorageException::transportFailed('GET', $path, 'no temp stream to read into');
+        }
+        try {
+            $response = $this->requestWithHeaders('GET', $path, '', [], $stream);
+            if (!$this->isPresent($response['status'], 'GET', $path)) {
+                fclose($stream);
+
+                return null;
+            }
+            // A body cut short on its way to the stream must not read as the
+            // object: the store said how long it is.
+            $length = $response['headers']['content-length'] ?? null;
+            if ($length !== null && ctype_digit($length) && (int) $length !== ftell($stream)) {
+                throw StorageException::transportFailed('GET', $path, sprintf('%d of %s bytes arrived', (int) ftell($stream), $length));
+            }
+        } catch (\Throwable $e) {
+            fclose($stream);
+            throw $e;
         }
 
-        fwrite($stream, $response['body']);
         rewind($stream);
+
         return $stream;
     }
 
@@ -249,20 +285,29 @@ class S3Driver implements StorageObjectStoreInterface
 
     /**
      * @param array<string, string> $extraHeaders
+     * @param resource|null $sink a successful response's body is written here, not returned
      * @return array{status: int, body: string, headers: array<string, string>}
      */
-    protected function requestWithHeaders(string $method, string $path, string $body = '', array $extraHeaders = []): array
+    protected function requestWithHeaders(string $method, string $path, string $body = '', array $extraHeaders = [], $sink = null): array
     {
         // Encoded once and reused for the request URL below AND the canonical
         // request's URI (see encodeObjectPath()) so the signature matches what
         // is actually sent.
+        $key = $path;
         $path = self::encodeObjectPath($path);
         $host = parse_url($this->endpoint, PHP_URL_HOST);
         $scheme = parse_url($this->endpoint, PHP_URL_SCHEME) ?: 'https';
         $port = parse_url($this->endpoint, PHP_URL_PORT);
 
-        $hostHeader = $this->bucket . '.' . $host;
-        if ($port && $port !== 443 && $port !== 80) {
+        if ($this->pathStyle) {
+            $path = '/' . rawurlencode($this->bucket) . $path;
+            $hostHeader = (string) $host;
+        } else {
+            $hostHeader = $this->bucket . '.' . $host;
+        }
+        // Only the scheme's own default port goes unsaid: http://host:443
+        // used to be sent to port 80.
+        if ($port && $port !== ($scheme === 'http' ? 80 : 443)) {
             $hostHeader .= ':' . $port;
         }
 
@@ -323,7 +368,9 @@ class S3Driver implements StorageObjectStoreInterface
         }
 
         $responseHeaders = [];
-        $transport = $this->executeHttp($url, $method, $curlHeaders, $body, $responseHeaders);
+        $transport = $sink === null
+            ? $this->executeHttp($url, $method, $curlHeaders, $body, $responseHeaders)
+            : $this->executeHttpInto($url, $method, $curlHeaders, $sink, $responseHeaders);
 
         // A transport failure (DNS, TLS, connection refused, timeout) leaves
         // curl_exec() === false and status 0. Surfacing it is essential: on a
@@ -333,7 +380,7 @@ class S3Driver implements StorageObjectStoreInterface
         if ($transport['body'] === false || $transport['errno'] !== 0) {
             throw StorageException::transportFailed(
                 $method,
-                $path,
+                $key,
                 $transport['error'] !== '' ? $transport['error'] : "curl error {$transport['errno']}",
             );
         }
@@ -355,6 +402,43 @@ class S3Driver implements StorageObjectStoreInterface
      */
     protected function executeHttp(string $url, string $method, array $curlHeaders, string $body, array &$responseHeaders): array
     {
+        return $this->exchange($url, $method, $curlHeaders, $body, $responseHeaders, null);
+    }
+
+    /**
+     * executeHttp() for a body read as it arrives: a successful response's
+     * body is written to $sink and 'body' is empty; an error's body comes
+     * back as usual.
+     *
+     * @param list<string>          $curlHeaders
+     * @param resource              $sink
+     * @param array<string, string> $responseHeaders
+     * @return array{body: string|false, errno: int, error: string, status: int}
+     */
+    protected function executeHttpInto(string $url, string $method, array $curlHeaders, $sink, array &$responseHeaders): array
+    {
+        $short = false;
+        $result = $this->exchange($url, $method, $curlHeaders, '', $responseHeaders, static function (string $chunk) use ($sink, &$short): void {
+            if (!$short && fwrite($sink, $chunk) !== strlen($chunk)) {
+                $short = true;
+            }
+        });
+        if ($short) {
+            // A full disk under the temp stream: the object would come back cut.
+            return ['body' => false, 'errno' => -1, 'error' => 'the object could not be written to a temp stream', 'status' => 0];
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param list<string>                $curlHeaders
+     * @param array<string, string>       $responseHeaders
+     * @param (\Closure(string): void)|null $onChunk
+     * @return array{body: string|false, errno: int, error: string, status: int}
+     */
+    private function exchange(string $url, string $method, array $curlHeaders, string $body, array &$responseHeaders, ?\Closure $onChunk): array
+    {
         $headers = [];
         foreach ($curlHeaders as $line) {
             [$name, $value] = array_map('trim', explode(':', $line, 2)) + [1 => ''];
@@ -373,12 +457,14 @@ class S3Driver implements StorageObjectStoreInterface
             // A signed request stays valid for 15 minutes, so resending one is
             // safe; a repeated PUT writes the same object again. An object comes
             // back as stored: no size cap (the driver never had one) and no
-            // inflating of an object kept with its own Content-Encoding.
+            // inflating of an object kept with its own Content-Encoding. A
+            // stream that has handed bytes on is not resent (the client's rule).
             $response = $this->http->send($request, new HttpCallOptions(
                 timeout: 30.0,
                 maxResponseBytes: PHP_INT_MAX,
                 decodeContent: false,
                 retry: RetryPolicy::idempotent(2),
+                onChunk: $onChunk,
             ));
         } catch (HttpTransportException $e) {
             return ['body' => false, 'errno' => -1, 'error' => $e->detail, 'status' => 0];
