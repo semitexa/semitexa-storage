@@ -372,8 +372,8 @@ class S3Driver implements StorageObjectStoreInterface
             ? $this->executeHttp($url, $method, $curlHeaders, $body, $responseHeaders)
             : $this->executeHttpInto($url, $method, $curlHeaders, $sink, $responseHeaders);
 
-        // A transport failure (DNS, TLS, connection refused, timeout) leaves
-        // curl_exec() === false and status 0. Surfacing it is essential: on a
+        // A transport failure (DNS, TLS, connection refused, timeout) comes
+        // back as body false and status 0. Surfacing it is essential: on a
         // read it is otherwise indistinguishable from a legitimate 404, and on
         // a write it silently drops the object. A real HTTP status (incl. 404)
         // is NOT a transport failure and flows through untouched.
