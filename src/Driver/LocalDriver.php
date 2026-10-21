@@ -60,10 +60,15 @@ final class LocalDriver implements StorageObjectStoreInterface
         $this->writeMetadata($path, $mimeType);
     }
 
+    /**
+     * An object is a file: a key that names a directory is no object, so it
+     * reads as missing (get() returned '' with a notice, exists() said yes,
+     * delete() warned), whatever the S3 driver would say for a prefix.
+     */
     public function get(string $path): ?string
     {
         $fullPath = $this->fullPath($path, forWrite: false);
-        if (!file_exists($fullPath)) {
+        if (!is_file($fullPath)) {
             return null;
         }
         return file_get_contents($fullPath);
@@ -72,7 +77,7 @@ final class LocalDriver implements StorageObjectStoreInterface
     public function delete(string $path): bool
     {
         $fullPath = $this->fullPath($path);
-        if (!file_exists($fullPath)) {
+        if (!is_file($fullPath)) {
             return false;
         }
         $result = unlink($fullPath);
@@ -82,7 +87,7 @@ final class LocalDriver implements StorageObjectStoreInterface
 
     public function exists(string $path): bool
     {
-        return file_exists($this->fullPath($path, forWrite: false));
+        return is_file($this->fullPath($path, forWrite: false));
     }
 
     public function url(string $path): string
@@ -106,7 +111,7 @@ final class LocalDriver implements StorageObjectStoreInterface
     public function stat(string $path): ?StoredObjectMetadata
     {
         $fullPath = $this->fullPath($path, forWrite: false);
-        if (!file_exists($fullPath)) {
+        if (!is_file($fullPath)) {
             return null;
         }
 
@@ -126,7 +131,7 @@ final class LocalDriver implements StorageObjectStoreInterface
     public function readStream(string $path)
     {
         $fullPath = $this->fullPath($path, forWrite: false);
-        if (!file_exists($fullPath)) {
+        if (!is_file($fullPath)) {
             return null;
         }
 
