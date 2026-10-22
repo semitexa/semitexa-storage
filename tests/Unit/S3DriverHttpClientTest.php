@@ -40,6 +40,55 @@ final class S3DriverHttpClientTest extends TestCase
         self::assertFalse($options->decodeContent, 'an object kept gzip-encoded comes back as stored');
     }
 
+    /** 30 s for the whole transfer cut a healthy download of a large object off mid-way. */
+    #[Test]
+    public function an_object_transfer_has_minutes_and_a_head_has_seconds(): void
+    {
+        $http = (new FakeHttpClient())->queue(HttpResponse::make(200), HttpResponse::make(200));
+        $driver = self::driver($http);
+
+        $driver->put('a.txt', 'x', 'text/plain');
+        $driver->exists('a.txt');
+
+        self::assertSame([600.0, 30.0], array_map(static fn ($o): float => $o->timeout, $http->recordedOptions()));
+    }
+
+    /** As a host name a dotted bucket is one level too deep for the *.s3 certificate. */
+    #[Test]
+    public function a_bucket_name_with_a_dot_is_addressed_in_the_path(): void
+    {
+        $http = (new FakeHttpClient())->queue(HttpResponse::make(200));
+
+        (new S3Driver('assets.example.com', 'eu-west-1', 'https://s3.eu-west-1.amazonaws.com', 'key', 'secret', $http))->put('a.txt', 'x', 'text/plain');
+
+        self::assertSame('https://s3.eu-west-1.amazonaws.com/assets.example.com/a.txt', $http->recorded()[0]->url ?? null);
+    }
+
+    /** Empty, the hook sent its own Content-Type and the signature no longer matched. */
+    #[Test]
+    public function an_empty_mime_type_is_sent_as_octet_stream(): void
+    {
+        $http = (new FakeHttpClient())->queue(HttpResponse::make(200));
+
+        self::driver($http)->put('a.bin', 'x', '');
+
+        self::assertSame('application/octet-stream', $http->recorded()[0]->header('Content-Type'));
+    }
+
+    /** libcurl folds `a/../b` and the hook does not: one path signed, another sent. */
+    #[Test]
+    public function a_key_with_a_dot_segment_is_refused(): void
+    {
+        $http = new FakeHttpClient();
+
+        $this->expectException(StorageException::class);
+        try {
+            self::driver($http)->put('a/../b.txt', 'x', 'text/plain');
+        } finally {
+            $http->assertSentCount(0);
+        }
+    }
+
     #[Test]
     public function a_mime_type_with_a_line_break_is_a_storage_failure(): void
     {

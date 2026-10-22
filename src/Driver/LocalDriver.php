@@ -356,6 +356,11 @@ final class LocalDriver implements StorageObjectStoreInterface
         // lexically rather than realpath-ing the leaf, then require the result to
         // stay under basePath (the trailing `/` in the prefix check rejects
         // sibling directories like `<base>-evil`).
+        // A NUL byte reached the filesystem calls as a ValueError, not a
+        // storage failure the caller handles.
+        if (str_contains($path, "\0")) {
+            throw StorageException::writeFailed($path, 'a key may not hold a NUL byte');
+        }
         $full = self::normalize($this->basePath . '/' . $path);
         if ($full !== $this->basePath && !str_starts_with($full, $this->basePath . '/')) {
             throw StorageException::writeFailed($path, 'resolved path escapes the storage root');

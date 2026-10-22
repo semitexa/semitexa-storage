@@ -32,7 +32,7 @@ class S3Driver implements StorageObjectStoreInterface
         ?string $region = null,
         ?string $endpoint = null,
         ?string $key = null,
-        ?string $secret = null,
+        #[\SensitiveParameter] ?string $secret = null,
         ?HttpClientInterface $http = null,
         ?bool $pathStyle = null,
     ) {
@@ -42,7 +42,7 @@ class S3Driver implements StorageObjectStoreInterface
         $this->endpoint = $endpoint ?? Environment::getEnvValue('STORAGE_S3_ENDPOINT', "https://s3.{$this->region}.amazonaws.com");
         $this->key = $key ?? Environment::getEnvValue('STORAGE_S3_KEY', '');
         $this->secret = $secret ?? Environment::getEnvValue('STORAGE_S3_SECRET', '');
-        $this->pathStyle = $pathStyle ?? self::pathStyleFor($this->endpoint);
+        $this->pathStyle = $pathStyle ?? self::pathStyleFor($this->endpoint, $this->bucket);
     }
 
     /**
@@ -51,9 +51,30 @@ class S3Driver implements StorageObjectStoreInterface
      * endpoint whose host cannot carry a bucket name in front of it — an IP
      * address, `localhost`, a one-word name such as a compose service — is
      * path style: a self-hosted store there has no bucket DNS, and every
-     * request failed to resolve `bucket.minio`.
+     * request failed to resolve `bucket.minio`. So is a bucket name with a dot
+     * (`assets.example.com`), as the AWS SDKs do: as a host name it is one
+     * level too deep for `*.s3.<region>.amazonaws.com`, and TLS refused it.
      */
-    private static function pathStyleFor(string $endpoint): bool
+    /**
+     * The whole transfer, which is all the limit curl and its coroutine hook
+     * share (neither can say "stalled" apart from "slow"): 30 s cut a healthy
+     * download of a large object off mid-way. An upload or a download has
+     * STORAGE_S3_TRANSFER_TIMEOUT (600 s), an upload more as its body is
+     * larger (at 128 KiB/s); a HEAD or DELETE has 30 s. A server that stalls
+     * mid-transfer holds the call that long.
+     */
+    private static function timeoutFor(string $method, int $bodyBytes): float
+    {
+        if (!in_array($method, ['GET', 'PUT'], true)) {
+            return 30.0;
+        }
+        $configured = (int) Environment::getEnvValue('STORAGE_S3_TRANSFER_TIMEOUT', '600');
+        $transfer = max(30, $configured > 0 ? $configured : 600);
+
+        return (float) max($transfer, intdiv($bodyBytes, 131_072));
+    }
+
+    private static function pathStyleFor(string $endpoint, string $bucket = ''): bool
     {
         $flag = strtolower(trim((string) Environment::getEnvValue('STORAGE_S3_PATH_STYLE', '')));
         if ($flag !== '') {
@@ -61,13 +82,16 @@ class S3Driver implements StorageObjectStoreInterface
         }
         $host = trim((string) parse_url($endpoint, PHP_URL_HOST), '[]');
 
-        return $host === 'localhost' || !str_contains($host, '.') || filter_var($host, FILTER_VALIDATE_IP) !== false;
+        return $host === 'localhost' || !str_contains($host, '.') || filter_var($host, FILTER_VALIDATE_IP) !== false
+            || str_contains($bucket, '.');
     }
 
     public function put(string $path, string $contents, string $mimeType): void
     {
         $response = $this->request('PUT', $path, $contents, [
-            'Content-Type' => $mimeType,
+            // Empty, the hook sends application/x-www-form-urlencoded in its
+            // place, and the signature (made over '') no longer matched.
+            'Content-Type' => trim($mimeType) !== '' ? $mimeType : 'application/octet-stream',
         ]);
         $status = $response['status'];
         // Any non-2xx (403 AccessDenied, 500, SignatureDoesNotMatch, or a 0
@@ -192,6 +216,13 @@ class S3Driver implements StorageObjectStoreInterface
     private static function encodeObjectPath(string $path): string
     {
         $normalized = '/' . ltrim($path, '/');
+        // libcurl folds `a/../b` before sending and the hook does not: one
+        // key signed one path and sent another (403 in the CLI only).
+        foreach (explode('/', $normalized) as $segment) {
+            if ($segment === '.' || $segment === '..') {
+                throw new StorageException("An object key may not hold a '.' or '..' segment: '{$path}'.");
+            }
+        }
 
         return implode('/', array_map(
             static fn (string $segment): string => rawurlencode($segment),
@@ -311,8 +342,11 @@ class S3Driver implements StorageObjectStoreInterface
             $hostHeader .= ':' . $port;
         }
 
-        $datetime = gmdate('Ymd\THis\Z');
-        $date = gmdate('Ymd');
+        // One clock read: two could straddle midnight UTC and sign with
+        // a date that is not the timestamp's.
+        $now = time();
+        $datetime = gmdate('Ymd\THis\Z', $now);
+        $date = gmdate('Ymd', $now);
         $payloadHash = hash('sha256', $body);
 
         $headers = array_merge([
@@ -332,7 +366,8 @@ class S3Driver implements StorageObjectStoreInterface
         foreach ($headers as $k => $v) {
             $lk = strtolower($k);
             $signedHeaderKeys[] = $lk;
-            $canonicalHeaders .= $lk . ':' . trim($v) . "\n";
+            // SigV4 folds inner runs of spaces too, as S3 reads the header.
+            $canonicalHeaders .= $lk . ':' . (string) preg_replace('/ {2,}/', ' ', trim($v)) . "\n";
         }
         $signedHeaders = implode(';', $signedHeaderKeys);
 
@@ -460,7 +495,7 @@ class S3Driver implements StorageObjectStoreInterface
             // inflating of an object kept with its own Content-Encoding. A
             // stream that has handed bytes on is not resent (the client's rule).
             $response = $this->http->send($request, new HttpCallOptions(
-                timeout: 30.0,
+                timeout: self::timeoutFor($method, strlen($body)),
                 maxResponseBytes: PHP_INT_MAX,
                 decodeContent: false,
                 retry: RetryPolicy::idempotent(2),
