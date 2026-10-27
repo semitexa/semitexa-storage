@@ -336,6 +336,10 @@ class S3Driver implements StorageObjectStoreInterface
         } else {
             $hostHeader = $this->bucket . '.' . $host;
         }
+        // An endpoint behind a path (https://gateway/s3) lost it here while
+        // url() kept it: every request went to the gateway's root. It is part
+        // of the URI that is signed too.
+        $path = rtrim((string) parse_url($this->endpoint, PHP_URL_PATH), '/') . $path;
         // Only the scheme's own default port goes unsaid: http://host:443
         // used to be sent to port 80.
         if ($port && $port !== ($scheme === 'http' ? 80 : 443)) {

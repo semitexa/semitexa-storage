@@ -65,6 +65,19 @@ final class S3DriverHttpClientTest extends TestCase
     }
 
     /** Empty, the hook sent its own Content-Type and the signature no longer matched. */
+    /** An endpoint behind a path lost it in requests while url() kept it. */
+    #[Test]
+    public function an_endpoint_behind_a_path_keeps_it_in_every_request(): void
+    {
+        $http = (new FakeHttpClient())->queue(HttpResponse::make(200));
+        $driver = new S3Driver('bucket', 'us-east-1', 'https://gateway.test/s3/', 'key', 'secret', $http, pathStyle: true);
+
+        $driver->put('a.txt', 'x', 'text/plain');
+
+        self::assertSame('https://gateway.test/s3/bucket/a.txt', $http->recorded()[0]->url ?? null);
+        self::assertSame('https://gateway.test/s3/bucket/a.txt', $driver->url('a.txt'), 'url() and the request agree');
+    }
+
     #[Test]
     public function an_empty_mime_type_is_sent_as_octet_stream(): void
     {
