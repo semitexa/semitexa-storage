@@ -64,7 +64,6 @@ final class S3DriverHttpClientTest extends TestCase
         self::assertSame('https://s3.eu-west-1.amazonaws.com/assets.example.com/a.txt', $http->recorded()[0]->url ?? null);
     }
 
-    /** Empty, the hook sent its own Content-Type and the signature no longer matched. */
     /** An endpoint behind a path lost it in requests while url() kept it. */
     #[Test]
     public function an_endpoint_behind_a_path_keeps_it_in_every_request(): void
@@ -78,6 +77,7 @@ final class S3DriverHttpClientTest extends TestCase
         self::assertSame('https://gateway.test/s3/bucket/a.txt', $driver->url('a.txt'), 'url() and the request agree');
     }
 
+    /** Empty, the hook sent its own Content-Type and the signature no longer matched. */
     #[Test]
     public function an_empty_mime_type_is_sent_as_octet_stream(): void
     {
