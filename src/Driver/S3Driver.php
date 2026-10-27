@@ -510,7 +510,11 @@ class S3Driver implements StorageObjectStoreInterface
         }
 
         foreach ($response->headers as $name => $values) {
-            $responseHeaders[$name] = $values[count($values) - 1];
+            // A name with no value (the response type allows one) says
+            // nothing: reading its last value was an undefined-key warning.
+            if ($values !== []) {
+                $responseHeaders[$name] = $values[array_key_last($values)];
+            }
         }
 
         return ['body' => $response->body, 'errno' => 0, 'error' => '', 'status' => $response->status];

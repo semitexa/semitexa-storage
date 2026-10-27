@@ -60,6 +60,7 @@ final class StorageReviewFixesTest extends TestCase
     {
         putenv('STORAGE_DRIVER= LOCAL ');
 
+        self::assertSame('local', StorageManager::configuredDriver());
         self::assertFalse((new StorageManager())->exists('surely-not-there-' . bin2hex(random_bytes(4))));
     }
 

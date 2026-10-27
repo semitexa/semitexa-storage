@@ -22,6 +22,45 @@ use Semitexa\Storage\Exception\StorageException;
  */
 final class S3DriverHttpClientTest extends TestCase
 {
+    /** @var array<string, string|false> what the shell exported, put back after each test */
+    private array $environment = [];
+
+    /** Both change the URL or the timeout these tests pin: a value the shell exported failed them. */
+    protected function setUp(): void
+    {
+        foreach (['STORAGE_S3_TRANSFER_TIMEOUT', 'STORAGE_S3_PATH_STYLE'] as $name) {
+            $this->environment[$name] = getenv($name);
+            putenv("{$name}=");
+        }
+    }
+
+    protected function tearDown(): void
+    {
+        foreach ($this->environment as $name => $value) {
+            putenv($value === false ? $name : "{$name}={$value}");
+        }
+    }
+
+    /** The response type allows a header name with no value; reading its last one was a warning. */
+    #[Test]
+    public function a_header_with_no_value_is_left_out(): void
+    {
+        $http = (new FakeHttpClient())->queue(new HttpResponse(200, '', ['content-type' => [], 'content-length' => ['5']]));
+        $warnings = [];
+        set_error_handler(static function (int $no, string $message) use (&$warnings): bool {
+            $warnings[] = $message;
+
+            return true;
+        });
+        try {
+            $meta = self::driver($http)->stat('a.txt');
+        } finally {
+            restore_error_handler();
+        }
+
+        self::assertSame([], $warnings);
+        self::assertSame([5, null], [$meta?->size, $meta?->mimeType]);
+    }
     #[Test]
     public function a_put_is_signed_and_sent_through_the_client_with_retries_for_a_resendable_request(): void
     {

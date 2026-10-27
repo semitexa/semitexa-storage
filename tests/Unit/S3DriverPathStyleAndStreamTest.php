@@ -19,9 +19,18 @@ use Semitexa\Storage\Exception\StorageException;
  */
 final class S3DriverPathStyleAndStreamTest extends TestCase
 {
+    private string|false $pathStyle = false;
+
+    /** Cleared for each test, and what the shell exported put back after it. */
+    protected function setUp(): void
+    {
+        $this->pathStyle = getenv('STORAGE_S3_PATH_STYLE');
+        putenv('STORAGE_S3_PATH_STYLE=');
+    }
+
     protected function tearDown(): void
     {
-        putenv('STORAGE_S3_PATH_STYLE');
+        putenv($this->pathStyle === false ? 'STORAGE_S3_PATH_STYLE' : 'STORAGE_S3_PATH_STYLE=' . $this->pathStyle);
     }
 
     #[Test]
