@@ -68,10 +68,14 @@ final class StorageManager implements StorageObjectStoreInterface
         return $this->getDriver()->describe($path);
     }
 
-    /** STORAGE_DRIVER as the manager reads it: trimmed, lowercase, `local` when unset. */
+    /** STORAGE_DRIVER as the manager reads it: trimmed, lowercase, `local` when unset or blank. */
     public static function configuredDriver(): string
     {
-        return strtolower(trim((string) Environment::getEnvValue('STORAGE_DRIVER', 'local')));
+        $driver = strtolower(trim((string) Environment::getEnvValue('STORAGE_DRIVER', 'local')));
+
+        // A blank STORAGE_DRIVER= selects the local driver, so it is reported
+        // as local: callers that guard on the name must see the same choice.
+        return $driver === '' ? 'local' : $driver;
     }
 
     private function getDriver(): StorageObjectStoreInterface

@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Semitexa\Storage\Application\Console\Command;
 
 use Semitexa\Core\Attribute\AsCommand;
-use Semitexa\Core\Environment;
 use Semitexa\Storage\Driver\LocalDriver;
+use Semitexa\Storage\StorageManager;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -48,8 +48,9 @@ final class StorageMigrateMetadataCommand extends Command
         // install it would otherwise scan an empty var/uploads and report
         // "nothing to migrate", which reads as "you are done" rather than
         // "this does not apply here".
-        $configured = Environment::getEnvValue('STORAGE_DRIVER', 'local') ?? 'local';
-        if ($path === null && strtolower(trim($configured)) !== 'local') {
+        // Read the way the manager reads it: a blank STORAGE_DRIVER is local.
+        $configured = StorageManager::configuredDriver();
+        if ($path === null && $configured !== 'local') {
             $output->writeln(sprintf(
                 '<comment>STORAGE_DRIVER is %s, so there is no local metadata to migrate.</comment>',
                 $configured,

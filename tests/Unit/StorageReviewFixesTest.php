@@ -6,10 +6,12 @@ namespace Semitexa\Storage\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+use Semitexa\Storage\Application\Console\Command\StorageMigrateMetadataCommand;
 use Semitexa\Storage\Driver\LocalDriver;
 use Semitexa\Storage\Application\Service\StorageDriverDoctorCheck;
 use Semitexa\Storage\Exception\StorageException;
 use Semitexa\Storage\StorageManager;
+use Symfony\Component\Console\Tester\CommandTester;
 
 /** Found while writing the storage guide (2026-10-21). */
 final class StorageReviewFixesTest extends TestCase
@@ -62,6 +64,35 @@ final class StorageReviewFixesTest extends TestCase
 
         self::assertSame('local', StorageManager::configuredDriver());
         self::assertFalse((new StorageManager())->exists('surely-not-there-' . bin2hex(random_bytes(4))));
+    }
+
+    /**
+     * STORAGE_DRIVER= (blank) selects the local driver, but the command
+     * compared the raw value to 'local', said there was nothing local to
+     * migrate and left every legacy sidecar where it was.
+     */
+    #[Test]
+    public function a_blank_storage_driver_is_local_for_the_metadata_migration_too(): void
+    {
+        putenv('STORAGE_DRIVER=   ');
+        self::assertSame('local', StorageManager::configuredDriver());
+
+        $root = $this->base . '/project';
+        mkdir($root . '/var/uploads', 0777, true);
+        $previousRoot = getenv('PROJECT_ROOT');
+        putenv('PROJECT_ROOT=' . $root);
+        try {
+            $tester = new CommandTester(new StorageMigrateMetadataCommand());
+            $exit = $tester->execute([]);
+        } finally {
+            $previousRoot === false ? putenv('PROJECT_ROOT') : putenv('PROJECT_ROOT=' . $previousRoot);
+            @rmdir($root . '/var/uploads');
+            @rmdir($root . '/var');
+            @rmdir($root);
+        }
+
+        self::assertSame(0, $exit);
+        self::assertSame("Nothing to migrate: no legacy metadata found.\n", $tester->getDisplay());
     }
 
     #[Test]
