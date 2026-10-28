@@ -15,6 +15,11 @@ namespace Semitexa\Storage\Exception;
  */
 final class StorageException extends \RuntimeException
 {
+    public static function unknownDriver(string $driver): self
+    {
+        return new self("STORAGE_DRIVER={$driver} is not a storage driver: use local or s3.");
+    }
+
     public static function writeFailed(string $path, string $reason): self
     {
         return new self("Storage write failed for '{$path}': {$reason}");

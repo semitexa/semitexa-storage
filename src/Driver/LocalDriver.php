@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Storage\Driver;
 
 use Semitexa\Core\Environment;
+use Semitexa\Core\Support\ProjectRoot;
 use Semitexa\Storage\Contract\StorageObjectStoreInterface;
 use Semitexa\Storage\Exception\StorageException;
 use Semitexa\Storage\Value\LegacyMetadataMigrationReport;
@@ -60,10 +61,15 @@ final class LocalDriver implements StorageObjectStoreInterface
         $this->writeMetadata($path, $mimeType);
     }
 
+    /**
+     * An object is a file: a key that names a directory is no object, so it
+     * reads as missing (get() returned '' with a notice, exists() said yes,
+     * delete() warned), whatever the S3 driver would say for a prefix.
+     */
     public function get(string $path): ?string
     {
         $fullPath = $this->fullPath($path, forWrite: false);
-        if (!file_exists($fullPath)) {
+        if (!is_file($fullPath)) {
             return null;
         }
         return file_get_contents($fullPath);
@@ -72,7 +78,7 @@ final class LocalDriver implements StorageObjectStoreInterface
     public function delete(string $path): bool
     {
         $fullPath = $this->fullPath($path);
-        if (!file_exists($fullPath)) {
+        if (!is_file($fullPath)) {
             return false;
         }
         $result = unlink($fullPath);
@@ -82,7 +88,7 @@ final class LocalDriver implements StorageObjectStoreInterface
 
     public function exists(string $path): bool
     {
-        return file_exists($this->fullPath($path, forWrite: false));
+        return is_file($this->fullPath($path, forWrite: false));
     }
 
     public function url(string $path): string
@@ -106,7 +112,7 @@ final class LocalDriver implements StorageObjectStoreInterface
     public function stat(string $path): ?StoredObjectMetadata
     {
         $fullPath = $this->fullPath($path, forWrite: false);
-        if (!file_exists($fullPath)) {
+        if (!is_file($fullPath)) {
             return null;
         }
 
@@ -126,7 +132,7 @@ final class LocalDriver implements StorageObjectStoreInterface
     public function readStream(string $path)
     {
         $fullPath = $this->fullPath($path, forWrite: false);
-        if (!file_exists($fullPath)) {
+        if (!is_file($fullPath)) {
             return null;
         }
 
@@ -350,6 +356,11 @@ final class LocalDriver implements StorageObjectStoreInterface
         // lexically rather than realpath-ing the leaf, then require the result to
         // stay under basePath (the trailing `/` in the prefix check rejects
         // sibling directories like `<base>-evil`).
+        // A NUL byte reached the filesystem calls as a ValueError, not a
+        // storage failure the caller handles.
+        if (str_contains($path, "\0")) {
+            throw StorageException::writeFailed($path, 'a key may not hold a NUL byte');
+        }
         $full = self::normalize($this->basePath . '/' . $path);
         if ($full !== $this->basePath && !str_starts_with($full, $this->basePath . '/')) {
             throw StorageException::writeFailed($path, 'resolved path escapes the storage root');
@@ -663,9 +674,16 @@ final class LocalDriver implements StorageObjectStoreInterface
         return $detected !== false ? $detected : 'application/octet-stream';
     }
 
+    /**
+     * PROJECT_ROOT when set, otherwise the project the code runs in. The
+     * working directory used to stand in, so a script started from another
+     * directory wrote to a var/uploads of its own.
+     */
     private function resolveDefaultBasePath(): string
     {
-        $projectRoot = Environment::getEnvValue('PROJECT_ROOT', getcwd());
+        $configured = Environment::getEnvValue('PROJECT_ROOT');
+        $projectRoot = is_string($configured) && $configured !== '' ? rtrim($configured, '/') : ProjectRoot::get();
+
         return $projectRoot . '/var/uploads';
     }
 }

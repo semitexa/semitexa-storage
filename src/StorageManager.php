@@ -10,13 +10,19 @@ use Semitexa\Storage\Contract\StorageDriverInterface;
 use Semitexa\Storage\Contract\StorageObjectStoreInterface;
 use Semitexa\Storage\Driver\LocalDriver;
 use Semitexa\Storage\Driver\S3Driver;
+use Semitexa\Storage\Exception\StorageException;
 use Semitexa\Storage\Value\StoredObjectDescriptor;
 use Semitexa\Storage\Value\StoredObjectMetadata;
+use Semitexa\Core\Attribute\InjectAsReadonly;
+use Semitexa\Core\Http\Client\HttpClientInterface;
 
 #[SatisfiesServiceContract(of: StorageDriverInterface::class)]
 #[SatisfiesServiceContract(of: StorageObjectStoreInterface::class)]
 final class StorageManager implements StorageObjectStoreInterface
 {
+    #[InjectAsReadonly]
+    protected HttpClientInterface $http;
+
     private ?StorageObjectStoreInterface $driver = null;
 
     public function put(string $path, string $contents, string $mimeType): void
@@ -62,17 +68,31 @@ final class StorageManager implements StorageObjectStoreInterface
         return $this->getDriver()->describe($path);
     }
 
+    /** STORAGE_DRIVER as the manager reads it: trimmed, lowercase, `local` when unset or blank. */
+    public static function configuredDriver(): string
+    {
+        $driver = strtolower(trim((string) Environment::getEnvValue('STORAGE_DRIVER', 'local')));
+
+        // A blank STORAGE_DRIVER= selects the local driver, so it is reported
+        // as local: callers that guard on the name must see the same choice.
+        return $driver === '' ? 'local' : $driver;
+    }
+
     private function getDriver(): StorageObjectStoreInterface
     {
         if ($this->driver !== null) {
             return $this->driver;
         }
 
-        $driverName = Environment::getEnvValue('STORAGE_DRIVER', 'local');
+        $driverName = self::configuredDriver();
 
+        // An unknown name used to fall through to local: STORAGE_DRIVER=S3 or a
+        // typo wrote every upload to this server's disk while the project
+        // believed it was in the bucket.
         $this->driver = match ($driverName) {
-            's3' => new S3Driver(),
-            default => new LocalDriver(),
+            's3' => new S3Driver(http: isset($this->http) ? $this->http : null),
+            'local', '' => new LocalDriver(),
+            default => throw StorageException::unknownDriver($driverName),
         };
 
         return $this->driver;
